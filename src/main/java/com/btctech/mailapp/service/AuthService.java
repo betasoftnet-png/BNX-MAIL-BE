@@ -11,6 +11,12 @@ import com.btctech.mailapp.repository.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.SimpleMailMessage;
@@ -34,13 +40,37 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AuthService {
 
+    @Value("${sms.provider.authkey:}")
+    private String smsAuthKey;
+
+    @Value("${sms.provider.templateId:}")
+    private String smsTemplateId;
+
+    @Value("${sms.provider.senderId:}")
+    private String smsSenderId;
+
     private final java.util.Map<String, ParentOtpData> parentOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, MobileOtpData> mobileOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static class ParentOtpData {
         private final String otp;
         private final java.time.LocalDateTime expiryTime;
 
         public ParentOtpData(String otp, int minutesToLive) {
+            this.otp = otp;
+            this.expiryTime = java.time.LocalDateTime.now().plusMinutes(minutesToLive);
+        }
+
+        public boolean isExpired() {
+            return java.time.LocalDateTime.now().isAfter(expiryTime);
+        }
+    }
+
+    private static class MobileOtpData {
+        private final String otp;
+        private final java.time.LocalDateTime expiryTime;
+
+        public MobileOtpData(String otp, int minutesToLive) {
             this.otp = otp;
             this.expiryTime = java.time.LocalDateTime.now().plusMinutes(minutesToLive);
         }
@@ -90,6 +120,96 @@ public class AuthService {
             throw new MailException("Invalid OTP code");
         }
         parentOtpCache.remove(key);
+        return true;
+    }
+
+    public void sendMobileOtp(String mobileNumber) {
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        int otpValue = 100000 + random.nextInt(900000);
+        String otp = String.valueOf(otpValue);
+
+        mobileOtpCache.put(mobileNumber.trim(), new MobileOtpData(otp, 15));
+
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            
+            // Clean mobile number (remove '+', spaces, dashes, etc. - keep only digits)
+            String cleanMobile = mobileNumber.replaceAll("[^0-9]", "");
+            
+            String url = "https://control.msg91.com/api/v5/flow";
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("authkey", smsAuthKey);
+            headers.set("Accept", "application/json");
+            headers.set("Content-Type", "application/json");
+
+            // Format JSON body according to MSG91 v5 flow API
+            // NOTE: If your MSG91 template uses a different variable name than VAR1 (e.g. OTP), change it here!
+            String requestBody = "{\n" +
+                    "  \"template_id\": \"" + smsTemplateId + "\",\n" +
+                    "  \"short_url\": \"0\",\n" +
+                    "  \"recipients\": [\n" +
+                    "    {\n" +
+                    "      \"mobiles\": \"" + cleanMobile + "\",\n" +
+                    "      \"num\": \"" + otp + "\",\n" +
+                    "      \"NUM\": \"" + otp + "\",\n" +
+                    "      \"VAR1\": \"" + otp + "\",\n" +
+                    "      \"var1\": \"" + otp + "\",\n" +
+                    "      \"OTP\": \"" + otp + "\",\n" +
+                    "      \"otp\": \"" + otp + "\"\n" +
+                    "    }\n" +
+                    "  ]\n" +
+                    "}";
+
+            HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
+            
+            String responseBody = response.getBody();
+            log.info("MSG91 Response: {}", responseBody);
+            
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            if (responseBody != null) {
+                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
+                if (root.has("type") && "error".equalsIgnoreCase(root.get("type").asText())) {
+                    String errorMessage = root.has("message") ? root.get("message").asText() : "Unknown MSG91 Error";
+                    throw new MailException(errorMessage);
+                }
+            }
+
+            log.info("✓ Mobile OTP generated and sent to: {}", mobileNumber);
+        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+            log.error("MSG91 HTTP Error: {}", e.getResponseBodyAsString());
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(e.getResponseBodyAsString());
+                String errorMessage = root.has("message") ? root.get("message").asText() : "SMS Provider Error";
+                throw new MailException(errorMessage);
+            } catch (Exception ex) {
+                throw new MailException("Failed to send SMS: " + e.getStatusText());
+            }
+        } catch (MailException e) {
+            // Rethrow our mapped exceptions so they reach the controller
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to send MSG91 OTP to {}: {}", mobileNumber, e.getMessage());
+            throw new MailException("Failed to send SMS verification code. Please try again.");
+        }
+    }
+
+    public boolean verifyMobileOtp(String mobileNumber, String otp) {
+        String key = mobileNumber.trim();
+        MobileOtpData data = mobileOtpCache.get(key);
+        if (data == null) {
+            throw new MailException("OTP not found or expired");
+        }
+        if (data.isExpired()) {
+            mobileOtpCache.remove(key);
+            throw new MailException("OTP has expired");
+        }
+        if (!data.otp.equals(otp)) {
+            throw new MailException("Invalid OTP code");
+        }
+        mobileOtpCache.remove(key);
         return true;
     }
 

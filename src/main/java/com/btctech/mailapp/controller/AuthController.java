@@ -511,6 +511,27 @@ public class AuthController {
         return ResponseEntity.ok(ApiResponse.success(null, "OTP verified successfully"));
     }
 
+    @PostMapping("/send-mobile-otp")
+    public ResponseEntity<ApiResponse<Void>> sendMobileOtp(@RequestBody java.util.Map<String, String> request) {
+        String mobile = request.get("mobile");
+        if (mobile == null || mobile.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Mobile number is required"));
+        }
+        authService.sendMobileOtp(mobile);
+        return ResponseEntity.ok(ApiResponse.success(null, "OTP sent to mobile number"));
+    }
+
+    @PostMapping("/verify-mobile-otp")
+    public ResponseEntity<ApiResponse<Void>> verifyMobileOtp(@RequestBody java.util.Map<String, String> request) {
+        String mobile = request.get("mobile");
+        String otp = request.get("otp");
+        if (mobile == null || mobile.trim().isEmpty() || otp == null || otp.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Mobile number and OTP are required"));
+        }
+        authService.verifyMobileOtp(mobile, otp);
+        return ResponseEntity.ok(ApiResponse.success(null, "Mobile OTP verified successfully"));
+    }
+
     /**
      * Get masked recovery options for forgot password
      */
