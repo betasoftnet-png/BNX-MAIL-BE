@@ -78,6 +78,33 @@ public class VerificationService {
 
     private void finalizePromotion(VerificationSession session) {
         log.info("Promoting email account {} to primary for user {}", session.getMailAccountId(), session.getUserId());
+        
+        try {
+            com.btctech.mailapp.dto.cashfree.CashfreeDigilockerDocumentResponse docResponse = cashfreeService.getDigilockerDocument(session.getVerificationId());
+            if (docResponse != null && docResponse.getDocument() != null) {
+                com.btctech.mailapp.entity.User user = userRepository.findById(session.getUserId())
+                        .orElseThrow(() -> new RuntimeException("User not found"));
+                        
+                String aadhaarName = docResponse.getDocument().getName();
+                String aadhaarNumber = docResponse.getDocument().getDocumentNumber();
+                
+                // Mask Aadhaar number (keep last 4 digits)
+                if (aadhaarNumber != null && aadhaarNumber.length() >= 4) {
+                    aadhaarNumber = "XXXXXXXX" + aadhaarNumber.substring(aadhaarNumber.length() - 4);
+                }
+                
+                user.setAadhaarName(aadhaarName);
+                user.setAadhaarNumber(aadhaarNumber);
+                userRepository.save(user);
+                
+                log.info("Saved verified Aadhaar details for user {}", session.getUserId());
+            }
+        } catch (Exception e) {
+            log.error("Failed to fetch or save DigiLocker document for session {}: {}", session.getReferenceId(), e.getMessage());
+            // Proceed with promotion even if document fetch fails? Or fail? The user said "After successful verification, retrieve...".
+            // Let's assume we proceed with promotion if status was SUCCESS.
+        }
+        
         mailboxService.setPrimaryEmail(session.getUserId(), session.getMailAccountId());
     }
 

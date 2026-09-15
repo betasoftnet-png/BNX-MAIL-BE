@@ -117,6 +117,12 @@ public class User {
     @Column(name = "pan_number", length = 20, unique = true)
     private String panNumber;
 
+    @Column(name = "aadhaar_number", length = 20)
+    private String aadhaarNumber;
+
+    @Column(name = "aadhaar_name", length = 150)
+    private String aadhaarName;
+
     @Column(name = "gstin", length = 30, unique = true)
     private String gstin;
 

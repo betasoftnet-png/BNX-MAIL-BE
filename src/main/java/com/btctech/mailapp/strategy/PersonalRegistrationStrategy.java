@@ -25,6 +25,7 @@ public class PersonalRegistrationStrategy implements RegistrationStrategy {
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setFirstName(request.getFirstName());
         user.setLastName(request.getLastName());
+        user.setPhoneNumber(request.getPhoneNumber());
         user.setDob(request.getDob());
         user.setActive(true);
 

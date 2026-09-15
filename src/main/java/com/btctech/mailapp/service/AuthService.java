@@ -46,6 +46,9 @@ public class AuthService {
     @Value("${sms.provider.templateId:}")
     private String smsTemplateId;
 
+    @Value("${sms.provider.forgotPasswordTemplateId:}")
+    private String smsForgotPasswordTemplateId;
+
     @Value("${sms.provider.senderId:}")
     private String smsSenderId;
 
@@ -594,8 +597,7 @@ public class AuthService {
         if ("EMAIL".equalsIgnoreCase(request.getMethod())) {
             sendOtpEmail(user.getRecoveryEmail(), otp);
         } else if ("PHONE".equalsIgnoreCase(request.getMethod())) {
-            // Mock SMS sending
-            log.info("Mock SMS sent to {}: Your BNX Mail password reset OTP is {}", user.getPhoneNumber(), otp);
+            sendOtpSms(user.getPhoneNumber(), otp);
         } else {
             throw new MailException("Invalid recovery method");
         }
@@ -611,8 +613,66 @@ public class AuthService {
             javaMailSender.send(message);
             log.info("Sent recovery OTP email to {}", toAddress);
         } catch (Exception e) {
-            log.error("Failed to send recovery email: {}", e.getMessage());
-            throw new MailException("Failed to send recovery email. Please try again later.");
+            log.error("Failed to send OTP email", e);
+            throw new MailException("Failed to send OTP email. Please try again later.");
+        }
+    }
+
+    private void sendOtpSms(String mobileNumber, String otp) {
+        if (smsForgotPasswordTemplateId == null || smsForgotPasswordTemplateId.isEmpty()) {
+            log.warn("Forgot Password SMS Template ID is not configured. Falling back to mock SMS.");
+            log.info("Mock SMS sent to {}: Your BNX Mail password reset OTP is {}", mobileNumber, otp);
+            return;
+        }
+
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            
+            // Clean mobile number
+            String cleanMobile = mobileNumber.replaceAll("[^0-9]", "");
+            
+            String url = "https://control.msg91.com/api/v5/flow";
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("authkey", smsAuthKey);
+            headers.set("Accept", "application/json");
+            headers.set("Content-Type", "application/json");
+
+            String requestBody = "{\n" +
+                    "  \"template_id\": \"" + smsForgotPasswordTemplateId + "\",\n" +
+                    "  \"short_url\": \"0\",\n" +
+                    "  \"recipients\": [\n" +
+                    "    {\n" +
+                    "      \"mobiles\": \"" + cleanMobile + "\",\n" +
+                    "      \"num\": \"" + otp + "\",\n" +
+                    "      \"NUM\": \"" + otp + "\",\n" +
+                    "      \"VAR1\": \"" + otp + "\",\n" +
+                    "      \"var1\": \"" + otp + "\",\n" +
+                    "      \"OTP\": \"" + otp + "\",\n" +
+                    "      \"otp\": \"" + otp + "\"\n" +
+                    "    }\n" +
+                    "  ]\n" +
+                    "}";
+
+            HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
+            
+            String responseBody = response.getBody();
+            log.info("MSG91 Response for Forgot Password: {}", responseBody);
+            
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            if (responseBody != null) {
+                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
+                if (root.has("type") && "error".equalsIgnoreCase(root.get("type").asText())) {
+                    String errorMessage = root.has("message") ? root.get("message").asText() : "Unknown MSG91 Error";
+                    throw new MailException("Failed to send OTP SMS: " + errorMessage);
+                }
+            }
+        } catch (MailException me) {
+            throw me;
+        } catch (Exception e) {
+            log.error("Failed to send OTP SMS", e);
+            throw new MailException("Failed to send OTP SMS. Please try again later.");
         }
     }
 

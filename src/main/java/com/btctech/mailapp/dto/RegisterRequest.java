@@ -12,6 +12,8 @@ public class RegisterRequest {
     @NotBlank(message = "Password is required")
     private String password;
 
+    private String phoneNumber;
+
     // Common fields
     private String firstName;
     private String lastName;

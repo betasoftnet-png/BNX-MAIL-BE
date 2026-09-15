@@ -37,7 +37,7 @@ public class CashfreeService {
                 .userFlow("signup")
                 .build();
 
-        HttpHeaders headers = createHeaders();
+        HttpHeaders headers = createHeadersV2();
         HttpEntity<CashfreeCreateUrlRequest> entity = new HttpEntity<>(request, headers);
 
         log.info("Calling Cashfree Create URL for reference: {}", referenceId);
@@ -57,7 +57,7 @@ public class CashfreeService {
     public CashfreeStatusResponse getVerificationStatus(String verificationId) {
         String url = apiBaseUrl + "/digilocker?verification_id=" + verificationId;
 
-        HttpHeaders headers = createHeaders();
+        HttpHeaders headers = createHeadersV2();
         HttpEntity<Void> entity = new HttpEntity<>(headers);
 
         try {
@@ -66,6 +66,22 @@ public class CashfreeService {
         } catch (Exception e) {
             log.error("Error checking Cashfree status: {}", e.getMessage());
             throw new RuntimeException("Failed to check status: " + e.getMessage());
+        }
+    }
+
+    public com.btctech.mailapp.dto.cashfree.CashfreeDigilockerDocumentResponse getDigilockerDocument(String verificationId) {
+        String url = apiBaseUrl + "/digilocker/document/AADHAAR?verification_id=" + verificationId;
+
+        HttpHeaders headers = createHeadersV2();
+        HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+        log.info("Fetching DigiLocker document for verificationId: {}", verificationId);
+        try {
+            ResponseEntity<com.btctech.mailapp.dto.cashfree.CashfreeDigilockerDocumentResponse> response = restTemplate.exchange(url, HttpMethod.GET, entity, com.btctech.mailapp.dto.cashfree.CashfreeDigilockerDocumentResponse.class);
+            return response.getBody();
+        } catch (Exception e) {
+            log.error("Error fetching DigiLocker document: {}", e.getMessage());
+            throw new RuntimeException("Failed to fetch DigiLocker document: " + e.getMessage());
         }
     }
 
@@ -175,11 +191,20 @@ public class CashfreeService {
         }
     }
 
+    @Value("${cashfree.api-version:2023-12-18}")
+    private String apiVersion;
+
     private HttpHeaders createHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("x-client-id", clientId);
         headers.set("x-client-secret", clientSecret);
+        return headers;
+    }
+
+    private HttpHeaders createHeadersV2() {
+        HttpHeaders headers = createHeaders();
+        headers.set("x-api-version", apiVersion);
         return headers;
     }
 

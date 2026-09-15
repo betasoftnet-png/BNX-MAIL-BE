@@ -61,6 +61,7 @@ public class BusinessRegistrationStrategy implements RegistrationStrategy {
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setFirstName(request.getOwnerFirstName());
         user.setLastName(request.getOwnerLastName());
+        user.setPhoneNumber(request.getPhoneNumber());
         user.setAccountType(AccountType.BUSINESS);
         user.setOrganization(org);
         user.setRole("ORG_ADMIN");
