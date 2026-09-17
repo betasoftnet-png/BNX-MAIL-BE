@@ -94,6 +94,39 @@ public class VerificationController {
         }
     }
 
+    @PostMapping("/verify-gst/{emailId}")
+    public ResponseEntity<ApiResponse<String>> verifyGstAndPromote(
+            @PathVariable Long emailId,
+            @RequestBody Map<String, String> request,
+            @RequestHeader("Authorization") String authHeader) {
+
+        try {
+            String token = authHeader.substring(7);
+            String email = jwtUtil.extractEmail(token);
+            User user = userService.getUserByEmail(email);
+
+            if (user == null) {
+                return ResponseEntity.status(401).body(ApiResponse.error("User not found from token"));
+            }
+
+            String gstin = request.get("gstin");
+            if (gstin == null || gstin.trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(ApiResponse.error("GSTIN is required"));
+            }
+
+            boolean success = verificationService.verifyGstAndFinalize(user.getId(), emailId, gstin);
+
+            if (success) {
+                return ResponseEntity.ok(ApiResponse.success("Success", "GSTIN verified successfully. Email is now primary."));
+            } else {
+                return ResponseEntity.badRequest().body(ApiResponse.error("GSTIN Verification failed."));
+            }
+        } catch (Exception e) {
+            log.error("Failed to verify GSTIN: {}", e.getMessage(), e);
+            return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
+        }
+    }
+
     /**
      * Webhook for Cashfree
      * Note: In a real app, you should verify the signature of the webhook.
@@ -109,6 +142,26 @@ public class VerificationController {
         } catch (Exception e) {
             log.error("Webhook processing failed: {}", e.getMessage());
             return ResponseEntity.internalServerError().body("FAILED");
+        }
+    }
+    @GetMapping("/fetch-gstins")
+    public ResponseEntity<ApiResponse<java.util.List<com.btctech.mailapp.dto.cashfree.GstinData>>> fetchGstins(
+            @RequestParam String pan,
+            @RequestHeader("Authorization") String authHeader) {
+        try {
+            String token = authHeader.substring(7);
+            String email = jwtUtil.extractEmail(token);
+            User user = userService.getUserByEmail(email);
+
+            if (user == null) {
+                return ResponseEntity.status(401).body(ApiResponse.error("User not found from token"));
+            }
+
+            java.util.List<com.btctech.mailapp.dto.cashfree.GstinData> activeGstins = verificationService.fetchActiveGstins(pan);
+            return ResponseEntity.ok(ApiResponse.success(activeGstins, "Success"));
+        } catch (Exception e) {
+            log.error("Failed to fetch GSTINs: {}", e.getMessage(), e);
+            return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
         }
     }
 }

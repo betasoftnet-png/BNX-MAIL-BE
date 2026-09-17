@@ -20,7 +20,9 @@ public class VerificationService {
     private final CashfreeService cashfreeService;
     private final VerificationSessionRepository sessionRepository;
     private final MailboxService mailboxService;
+    private final MastersIndiaGstService mastersIndiaGstService;
     private final com.btctech.mailapp.repository.UserRepository userRepository;
+    private final com.btctech.mailapp.repository.BusinessProfileRepository businessProfileRepository;
 
     @Value("${app.frontend.redirect-url:https://www.b2auth.com/}")
     private String frontendRedirectUrl;
@@ -120,7 +122,7 @@ public class VerificationService {
                 throw new RuntimeException("This PAN is already registered to another account.");
             }
         }
-        
+
         com.btctech.mailapp.entity.User currentUser = userRepository.findById(userId)
             .orElseThrow(() -> new RuntimeException("User not found"));
 
@@ -129,24 +131,48 @@ public class VerificationService {
                 throw new RuntimeException("GSTIN is required for business accounts.");
             }
 
+            java.util.Optional<com.btctech.mailapp.entity.User> existingGstUserOpt = userRepository.findByGstin(gstin);
+            if (existingGstUserOpt.isPresent() && !existingGstUserOpt.get().getId().equals(userId)) {
+                log.warn("GSTIN Verification FAILED: GSTIN {} is already registered to another user", gstin);
+                throw new RuntimeException("This GSTIN is already registered to another account.");
+            }
+
             // Call Cashfree PAN to GSTIN API
             String verificationId = "pan_gstin_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
             com.btctech.mailapp.dto.cashfree.CashfreePanToGstinResponse cfResponse = cashfreeService.getGstinByPan(pan, verificationId);
             
             if ("SUCCESS".equalsIgnoreCase(cfResponse.getStatus()) && cfResponse.getGstinList() != null) {
-                boolean verified = false;
+                com.btctech.mailapp.dto.cashfree.GstinData matchedData = null;
                 for (com.btctech.mailapp.dto.cashfree.GstinData data : cfResponse.getGstinList()) {
                     if (data.getGstin().equalsIgnoreCase(gstin) && "ACTIVE".equalsIgnoreCase(data.getStatus())) {
-                        verified = true;
+                        matchedData = data;
                         break;
                     }
                 }
                 
-                if (!verified) {
+                if (matchedData == null) {
                     throw new RuntimeException("The provided GSTIN is not valid or not active for this PAN.");
                 }
 
-                log.info("Business Verification SUCCESS for user {}.", userId);
+                log.info("Business Verification SUCCESS for user {}. Matched GSTIN: {}", userId, gstin);
+                
+                // Save details to BusinessProfile
+                com.btctech.mailapp.entity.BusinessProfile profile = businessProfileRepository.findByUserId(userId)
+                        .orElse(new com.btctech.mailapp.entity.BusinessProfile());
+                profile.setUser(currentUser);
+                
+                if (matchedData.getLegalName() != null && !matchedData.getLegalName().trim().isEmpty()) {
+                    profile.setBusinessName(matchedData.getLegalName());
+                }
+                if (matchedData.getConstitutionOfBusiness() != null) {
+                    profile.setBusinessType(matchedData.getConstitutionOfBusiness());
+                }
+                if (profile.getBusinessName() == null || profile.getBusinessName().trim().isEmpty()) {
+                    profile.setBusinessName("Organization - " + gstin);
+                }
+                profile.setGstin(gstin);
+                businessProfileRepository.save(profile);
+
                 currentUser.setPanNumber(pan);
                 currentUser.setGstin(gstin);
                 userRepository.save(currentUser);
@@ -186,6 +212,88 @@ public class VerificationService {
                 log.warn("PAN Verification FAILED for user {}. Reason: {}", userId, cfResponse.getMessage());
                 return false;
             }
+        }
+    }
+
+    public java.util.List<com.btctech.mailapp.dto.cashfree.GstinData> fetchActiveGstins(String pan) {
+        String verificationId = "pan_gstin_fetch_" + UUID.randomUUID().toString().replace("-", "").substring(0, 15);
+        com.btctech.mailapp.dto.cashfree.CashfreePanToGstinResponse cfResponse = cashfreeService.getGstinByPan(pan, verificationId);
+        
+        java.util.List<com.btctech.mailapp.dto.cashfree.GstinData> activeGstins = new java.util.ArrayList<>();
+        if ("SUCCESS".equalsIgnoreCase(cfResponse.getStatus()) && cfResponse.getGstinList() != null) {
+            for (com.btctech.mailapp.dto.cashfree.GstinData data : cfResponse.getGstinList()) {
+                if ("ACTIVE".equalsIgnoreCase(data.getStatus())) {
+                    activeGstins.add(data);
+                }
+            }
+        }
+        return activeGstins;
+    }
+
+    @Transactional
+    public boolean verifyGstAndFinalize(Long userId, Long mailAccountId, String gstin) {
+        log.info("Initiating Masters India GST verification for user {} and mailAccountId {}", userId, mailAccountId);
+
+        java.util.Optional<com.btctech.mailapp.entity.User> existingGstUserOpt = userRepository.findByGstin(gstin);
+        if (existingGstUserOpt.isPresent() && !existingGstUserOpt.get().getId().equals(userId)) {
+            log.warn("GST Verification FAILED: GSTIN {} is already registered to another user", gstin);
+            throw new RuntimeException("This GSTIN is already registered to another account.");
+        }
+
+        com.btctech.mailapp.entity.User currentUser = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (currentUser.getAccountType() != com.btctech.mailapp.entity.AccountType.BUSINESS) {
+            throw new RuntimeException("GST Verification is only for Business accounts.");
+        }
+
+        if (gstin == null || gstin.trim().isEmpty()) {
+            throw new RuntimeException("GSTIN is required.");
+        }
+
+        // Call Masters India GST API
+        com.btctech.mailapp.dto.mastersindia.MastersIndiaGstResponse response = mastersIndiaGstService.verifyGstin(gstin);
+
+        if (response.getData() != null && "Active".equalsIgnoreCase(response.getData().getSts())) {
+            log.info("GST Verification SUCCESS for user {}.", userId);
+            
+            // Save details to BusinessProfile
+            com.btctech.mailapp.entity.BusinessProfile profile = businessProfileRepository.findByUserId(userId)
+                    .orElse(new com.btctech.mailapp.entity.BusinessProfile());
+            profile.setUser(currentUser);
+            if (response.getData().getLgnm() != null && (profile.getBusinessName() == null || profile.getBusinessName().isEmpty())) {
+                profile.setBusinessName(response.getData().getLgnm());
+            }
+            if (response.getData().getDty() != null) {
+                profile.setBusinessType(response.getData().getDty());
+            }
+            if (response.getData().getPradr() != null && response.getData().getPradr().getAddr() != null) {
+                com.btctech.mailapp.dto.mastersindia.MastersIndiaGstResponse.Address addr = response.getData().getPradr().getAddr();
+                StringBuilder addrStr = new StringBuilder();
+                if (addr.getBnm() != null) addrStr.append(addr.getBnm()).append(", ");
+                if (addr.getSt() != null) addrStr.append(addr.getSt()).append(", ");
+                if (addr.getLoc() != null) addrStr.append(addr.getLoc()).append(", ");
+                if (addr.getCity() != null) addrStr.append(addr.getCity()).append(", ");
+                if (addr.getDst() != null) addrStr.append(addr.getDst()).append(", ");
+                if (addr.getStcd() != null) addrStr.append(addr.getStcd()).append(" ");
+                if (addr.getPncd() != null) addrStr.append("- ").append(addr.getPncd());
+                
+                String finalAddr = addrStr.toString().trim();
+                if (finalAddr.endsWith(",")) finalAddr = finalAddr.substring(0, finalAddr.length() - 1);
+                profile.setBusinessAddress(finalAddr);
+            }
+            profile.setGstin(gstin);
+            businessProfileRepository.save(profile);
+
+            // Save GSTIN in user
+            currentUser.setGstin(gstin); // Store GSTIN
+            userRepository.save(currentUser);
+
+            mailboxService.setPrimaryEmail(userId, mailAccountId);
+
+            return true;
+        } else {
+            throw new RuntimeException("The provided GSTIN is not active or invalid.");
         }
     }
 }

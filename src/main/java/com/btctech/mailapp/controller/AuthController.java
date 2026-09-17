@@ -83,6 +83,26 @@ public class AuthController {
                 ApiResponse.success(data, "User registered successfully"));
     }
 
+    @GetMapping("/fetch-gstins")
+    public ResponseEntity<ApiResponse<java.util.List<com.btctech.mailapp.dto.cashfree.GstinData>>> fetchGstins(
+            @RequestParam String pan) {
+        log.info("Publicly fetching active GSTINs for PAN: {}", pan);
+        try {
+            // Using VerificationService to fetch GSTINs
+            java.util.List<com.btctech.mailapp.dto.cashfree.GstinData> activeGstins = 
+                com.btctech.mailapp.service.VerificationService.class.cast(
+                    org.springframework.web.context.support.WebApplicationContextUtils.getRequiredWebApplicationContext(
+                        ((org.springframework.web.context.request.ServletRequestAttributes) org.springframework.web.context.request.RequestContextHolder.currentRequestAttributes()).getRequest().getServletContext()
+                    ).getBean(com.btctech.mailapp.service.VerificationService.class)
+                ).fetchActiveGstins(pan);
+            
+            return ResponseEntity.ok(ApiResponse.success(activeGstins, "Success"));
+        } catch (Exception e) {
+            log.error("Failed to fetch GSTINs: {}", e.getMessage(), e);
+            return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
+        }
+    }
+
     /**
      * Public endpoint to verify business details (CIN or GSTIN) before registration
      */
@@ -117,9 +137,19 @@ public class AuthController {
                     return ResponseEntity.badRequest().body(ApiResponse.error("GSTIN is required"));
                 }
                 
-                // Fail fast if GSTIN already registered
+                // Fail fast if GSTIN already registered in business profile
                 if (businessProfileRepository.existsByGstin(request.getGstin())) {
                     return ResponseEntity.badRequest().body(ApiResponse.error("This GSTIN is already verified with another business"));
+                }
+                // Fail fast if GSTIN already registered in User table
+                com.btctech.mailapp.repository.UserRepository userRepository = 
+                    com.btctech.mailapp.repository.UserRepository.class.cast(
+                        org.springframework.web.context.support.WebApplicationContextUtils.getRequiredWebApplicationContext(
+                            ((org.springframework.web.context.request.ServletRequestAttributes) org.springframework.web.context.request.RequestContextHolder.currentRequestAttributes()).getRequest().getServletContext()
+                        ).getBean(com.btctech.mailapp.repository.UserRepository.class)
+                    );
+                if (userRepository.findByGstin(request.getGstin()).isPresent()) {
+                    return ResponseEntity.badRequest().body(ApiResponse.error("This GSTIN is already registered to another account"));
                 }
                 
                 // Fetch GSTIN details
@@ -138,6 +168,23 @@ public class AuthController {
             } else if ("LARGE_BUSINESS".equalsIgnoreCase(request.getType())) {
                 if (request.getCin() == null || request.getPan() == null || request.getGstin() == null) {
                     return ResponseEntity.badRequest().body(ApiResponse.error("CIN, PAN, and GSTIN are required"));
+                }
+
+                // Uniqueness checks
+                if (businessProfileRepository.existsByCin(request.getCin())) {
+                    return ResponseEntity.badRequest().body(ApiResponse.error("This CIN is already verified with another business"));
+                }
+                if (businessProfileRepository.existsByGstin(request.getGstin())) {
+                    return ResponseEntity.badRequest().body(ApiResponse.error("This GSTIN is already verified with another business"));
+                }
+                com.btctech.mailapp.repository.UserRepository userRepository = 
+                    com.btctech.mailapp.repository.UserRepository.class.cast(
+                        org.springframework.web.context.support.WebApplicationContextUtils.getRequiredWebApplicationContext(
+                            ((org.springframework.web.context.request.ServletRequestAttributes) org.springframework.web.context.request.RequestContextHolder.currentRequestAttributes()).getRequest().getServletContext()
+                        ).getBean(com.btctech.mailapp.repository.UserRepository.class)
+                    );
+                if (userRepository.findByGstin(request.getGstin()).isPresent()) {
+                    return ResponseEntity.badRequest().body(ApiResponse.error("This GSTIN is already registered to another account"));
                 }
                 
                 // Allow a strict test bypass if the sandbox is broken

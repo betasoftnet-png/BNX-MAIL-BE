@@ -24,4 +24,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
     org.springframework.data.domain.Page<User> findByActiveFalse(org.springframework.data.domain.Pageable pageable);
 
     Optional<User> findByPanNumber(String panNumber);
+    Optional<User> findByGstin(String gstin);
 }
