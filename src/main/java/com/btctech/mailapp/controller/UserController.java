@@ -31,7 +31,6 @@ public class UserController {
     private final com.btctech.mailapp.repository.MailAccountRepository mailAccountRepository;
     private final JwtUtil jwtUtil;
     private final com.btctech.mailapp.repository.BusinessProfileRepository businessProfileRepository;
-    @org.springframework.transaction.annotation.Transactional
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentUser(
             @RequestHeader("Authorization") String authHeader) {
