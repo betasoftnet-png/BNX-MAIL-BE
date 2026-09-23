@@ -32,30 +32,31 @@ public class CasboxService {
         message.setTimestamp(LocalDateTime.now());
 
         CasboxMessage saved = casboxMessageRepository.save(message);
-        CasboxMessageDto dto = convertToDto(saved);
+        CasboxMessageDto senderDto = convertToDto(saved, senderEmail);
+        CasboxMessageDto receiverDto = convertToDto(saved, request.getReceiverEmail());
 
         // Send to receiver via WebSocket
         messagingTemplate.convertAndSendToUser(
                 request.getReceiverEmail(),
                 "/queue/casbox/messages",
-                dto
+                receiverDto
         );
 
         // Also send to sender via WebSocket for instant UI update
         messagingTemplate.convertAndSendToUser(
                 senderEmail,
                 "/queue/casbox/messages",
-                dto
+                senderDto
         );
 
-        return dto;
+        return senderDto;
     }
 
     @Transactional(readOnly = true)
     public List<CasboxMessageDto> getThread(String email1, String email2) {
         return casboxMessageRepository.findConversation(email1, email2)
                 .stream()
-                .map(this::convertToDto)
+                .map(m -> convertToDto(m, email1))
                 .collect(Collectors.toList());
     }
 
@@ -63,8 +64,24 @@ public class CasboxService {
     public List<CasboxMessageDto> getAllMessages(String userEmail) {
         return casboxMessageRepository.findAllMessagesForUser(userEmail)
                 .stream()
-                .map(this::convertToDto)
+                .map(m -> convertToDto(m, userEmail))
                 .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public void updateArchiveStatus(List<Long> messageIds, Boolean archived, String userEmail) {
+        if (messageIds == null || messageIds.isEmpty()) return;
+        List<CasboxMessage> messages = casboxMessageRepository.findAllById(messageIds);
+        boolean state = Boolean.TRUE.equals(archived);
+        for (CasboxMessage msg : messages) {
+            if (msg.getSenderEmail() != null && msg.getSenderEmail().equalsIgnoreCase(userEmail)) {
+                msg.setSenderArchived(state);
+            }
+            if (msg.getReceiverEmail() != null && msg.getReceiverEmail().equalsIgnoreCase(userEmail)) {
+                msg.setReceiverArchived(state);
+            }
+        }
+        casboxMessageRepository.saveAll(messages);
     }
 
     @Transactional
@@ -79,7 +96,7 @@ public class CasboxService {
                 messagingTemplate.convertAndSendToUser(
                         msg.getSenderEmail(),
                         "/queue/casbox/status",
-                        convertToDto(msg)
+                        convertToDto(msg, msg.getSenderEmail())
                 );
             }
         }
@@ -95,7 +112,7 @@ public class CasboxService {
                 messagingTemplate.convertAndSendToUser(
                         msg.getSenderEmail(),
                         "/queue/casbox/status",
-                        convertToDto(msg)
+                        convertToDto(msg, msg.getSenderEmail())
                 );
             }
         }
@@ -103,6 +120,10 @@ public class CasboxService {
     }
 
     private CasboxMessageDto convertToDto(CasboxMessage entity) {
+        return convertToDto(entity, null);
+    }
+
+    private CasboxMessageDto convertToDto(CasboxMessage entity, String currentUserEmail) {
         CasboxMessageDto dto = new CasboxMessageDto();
         dto.setId(entity.getId());
         dto.setSenderEmail(entity.getSenderEmail());
@@ -112,6 +133,20 @@ public class CasboxService {
         dto.setAttachmentsJson(entity.getAttachmentsJson());
         dto.setStatus(entity.getStatus());
         dto.setTimestamp(entity.getTimestamp());
+        dto.setSenderArchived(entity.isSenderArchived());
+        dto.setReceiverArchived(entity.isReceiverArchived());
+
+        boolean archived = false;
+        if (currentUserEmail != null) {
+            if (currentUserEmail.equalsIgnoreCase(entity.getSenderEmail()) && currentUserEmail.equalsIgnoreCase(entity.getReceiverEmail())) {
+                archived = entity.isSenderArchived() || entity.isReceiverArchived();
+            } else if (currentUserEmail.equalsIgnoreCase(entity.getSenderEmail())) {
+                archived = entity.isSenderArchived();
+            } else if (currentUserEmail.equalsIgnoreCase(entity.getReceiverEmail())) {
+                archived = entity.isReceiverArchived();
+            }
+        }
+        dto.setIsArchived(archived);
         return dto;
     }
 }

@@ -308,6 +308,25 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FA
 ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(255) NULL;
 
 -- ==========================================
+-- TABLE: CASBOX_MESSAGES (Internal chat & messaging)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS casbox_messages (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    sender_email VARCHAR(255) NOT NULL,
+    receiver_email VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NULL,
+    body LONGTEXT NULL,
+    attachments_json LONGTEXT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'SENT',
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sender_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    receiver_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    INDEX idx_casbox_sender (sender_email),
+    INDEX idx_casbox_receiver (receiver_email),
+    INDEX idx_casbox_timestamp (timestamp)
+) ENGINE=InnoDB;
+
+-- ==========================================
 -- SAMPLE DATA
 -- ==========================================
 INSERT IGNORE INTO users (username, email, password, first_name, last_name, role) 

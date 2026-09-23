@@ -34,4 +34,18 @@ public class CasboxMessage {
 
     @Column(name = "timestamp", nullable = false)
     private LocalDateTime timestamp = LocalDateTime.now();
+
+    @Column(name = "sender_archived", nullable = false)
+    private Boolean senderArchived = false;
+
+    @Column(name = "receiver_archived", nullable = false)
+    private Boolean receiverArchived = false;
+
+    public boolean isSenderArchived() {
+        return senderArchived != null && senderArchived;
+    }
+
+    public boolean isReceiverArchived() {
+        return receiverArchived != null && receiverArchived;
+    }
 }

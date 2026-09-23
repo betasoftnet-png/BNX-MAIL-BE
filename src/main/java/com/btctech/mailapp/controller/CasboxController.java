@@ -1,5 +1,6 @@
 package com.btctech.mailapp.controller;
 
+import com.btctech.mailapp.dto.CasboxArchiveRequest;
 import com.btctech.mailapp.dto.CasboxMessageDto;
 import com.btctech.mailapp.dto.CasboxSendRequest;
 import com.btctech.mailapp.dto.CasboxStatusRequest;
@@ -39,6 +40,25 @@ public class CasboxController {
     public ResponseEntity<List<CasboxMessageDto>> getAllMessages(Authentication authentication) {
         String userEmail = authentication.getName();
         return ResponseEntity.ok(casboxService.getAllMessages(userEmail));
+    }
+
+    @PatchMapping("/archive")
+    public ResponseEntity<Void> updateArchiveStatus(
+            @RequestBody CasboxArchiveRequest request,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        casboxService.updateArchiveStatus(request.getMessageIds(), request.getArchived(), userEmail);
+        return ResponseEntity.ok().build();
+    }
+
+    @PatchMapping("/{id}/archive")
+    public ResponseEntity<Void> archiveMessage(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "true") boolean archived,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        casboxService.updateArchiveStatus(List.of(id), archived, userEmail);
+        return ResponseEntity.ok().build();
     }
 
     @PatchMapping("/status")
