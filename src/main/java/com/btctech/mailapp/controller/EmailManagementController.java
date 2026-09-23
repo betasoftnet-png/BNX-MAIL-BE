@@ -95,6 +95,10 @@ public class EmailManagementController {
             // ✅ FIX: Pass overrideDomain to createCustomEmail
             MailAccount mailAccount = mailboxService.createCustomEmail(user, request, plainPassword, overrideDomain);
 
+            if (Boolean.TRUE.equals(request.getIsPrimary())) {
+                mailboxService.setPrimaryEmail(user.getId(), mailAccount.getId());
+                mailAccount.setIsPrimary(true); // Update local object for response
+            }
 
             // Prepare response
             Map<String, Object> data = new HashMap<>();

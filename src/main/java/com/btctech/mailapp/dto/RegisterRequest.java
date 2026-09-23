@@ -37,7 +37,6 @@ public class RegisterRequest {
     private String businessFlow; // 'primary' or 'secondary'
     private String businessSize; // 'small' or 'large'
     private String industry;
-    private String cin;
     private String gstin;
 
     // Detailed onboarding fields

@@ -7,6 +7,5 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface BusinessProfileRepository extends JpaRepository<BusinessProfile, Long> {
     java.util.Optional<BusinessProfile> findByUserId(Long userId);
-    boolean existsByCin(String cin);
     boolean existsByGstin(String gstin);
 }

@@ -17,4 +17,6 @@ public class CreateEmailRequest {
     // Optional: If not provided, the password from Step 1 registration will be used.
     @Size(min = 8, message = "Password must be at least 8 characters")
     private String password;
+    
+    private Boolean isPrimary;
 }

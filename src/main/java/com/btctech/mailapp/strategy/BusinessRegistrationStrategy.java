@@ -87,14 +87,18 @@ public class BusinessRegistrationStrategy implements RegistrationStrategy {
             profile.setBusinessWebsite(request.getBusinessWebsite());
             profile.setBusinessAddress(request.getBusinessAddress());
             
-            profile.setCin(request.getCin());
-            profile.setGstin(request.getGstin());
+            String gstin = request.getGstin();
+            if (gstin != null && gstin.trim().isEmpty()) {
+                gstin = null;
+            }
+            profile.setGstin(gstin);
+
             // No temporary login for primary; they provide all details upfront
             profile.setOnboarded(true);
             
             // Also store gstin on User entity for generic verification if needed
-            if (request.getGstin() != null) {
-                user.setGstin(request.getGstin());
+            if (gstin != null) {
+                user.setGstin(gstin);
                 userRepository.save(user);
             }
         } else {
@@ -105,7 +109,7 @@ public class BusinessRegistrationStrategy implements RegistrationStrategy {
         try {
             businessProfileRepository.save(profile);
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
-            throw new com.btctech.mailapp.exception.MailException("A business account with these verification details (CIN/GSTIN) already exists.");
+            throw new com.btctech.mailapp.exception.MailException("A business account with these verification details (GSTIN) already exists.");
         }
 
         return user;
