@@ -149,4 +149,34 @@ public class CasboxService {
         dto.setIsArchived(archived);
         return dto;
     }
+
+    @Transactional
+    public void deleteConversation(String userEmail, String contactEmailOrId) {
+        if (userEmail == null || contactEmailOrId == null || contactEmailOrId.trim().isEmpty()) {
+            return;
+        }
+
+        String contactEmail = contactEmailOrId.trim();
+
+        // Support passing either a numeric message ID or contact email
+        if (contactEmail.matches("\\d+")) {
+            try {
+                Long id = Long.parseLong(contactEmail);
+                CasboxMessage msg = casboxMessageRepository.findById(id).orElse(null);
+                if (msg != null) {
+                    if (userEmail.equalsIgnoreCase(msg.getSenderEmail())) {
+                        contactEmail = msg.getReceiverEmail();
+                    } else if (userEmail.equalsIgnoreCase(msg.getReceiverEmail())) {
+                        contactEmail = msg.getSenderEmail();
+                    } else {
+                        throw new org.springframework.security.access.AccessDeniedException("Unauthorized to delete this conversation");
+                    }
+                } else {
+                    return;
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+
+        casboxMessageRepository.deleteConversation(userEmail.trim(), contactEmail);
+    }
 }

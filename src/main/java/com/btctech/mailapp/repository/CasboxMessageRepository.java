@@ -19,4 +19,9 @@ public interface CasboxMessageRepository extends JpaRepository<CasboxMessage, Lo
 
     @Query("SELECT m FROM CasboxMessage m WHERE m.receiverEmail = :receiverEmail AND m.status != 'SEEN'")
     List<CasboxMessage> findUnseenMessagesForUser(@Param("receiverEmail") String receiverEmail);
+
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("DELETE FROM CasboxMessage m WHERE (LOWER(TRIM(m.senderEmail)) = LOWER(TRIM(:email1)) AND LOWER(TRIM(m.receiverEmail)) = LOWER(TRIM(:email2))) OR (LOWER(TRIM(m.senderEmail)) = LOWER(TRIM(:email2)) AND LOWER(TRIM(m.receiverEmail)) = LOWER(TRIM(:email1)))")
+    void deleteConversation(@Param("email1") String email1, @Param("email2") String email2);
 }

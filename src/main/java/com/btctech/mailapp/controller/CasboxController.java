@@ -76,4 +76,18 @@ public class CasboxController {
         casboxService.markUnseenAsDelivered(receiverEmail);
         return ResponseEntity.ok().build();
     }
+
+    @DeleteMapping({"/conversation/{contactEmail:.+}", "/conversation", "/messages/{contactEmail:.+}", "/{contactEmail:.+}"})
+    public ResponseEntity<Void> deleteConversation(
+            @PathVariable(required = false) String contactEmail,
+            @RequestParam(required = false) String email,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        String targetContact = contactEmail != null ? contactEmail : email;
+        if (targetContact == null || targetContact.trim().isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+        casboxService.deleteConversation(userEmail, targetContact.trim());
+        return ResponseEntity.ok().build();
+    }
 }
