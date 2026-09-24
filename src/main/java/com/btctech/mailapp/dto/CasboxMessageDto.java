@@ -15,6 +15,16 @@ public class CasboxMessageDto {
     private String status;
     private LocalDateTime timestamp;
 
+    // Contact alias and display fields
+    private String senderUsername;
+    private String receiverUsername;
+    private String senderDisplayName;
+    private String receiverDisplayName;
+    private String contactDisplayName;
+    private String contactUsername;
+    private Long contactUserId;
+    private String customName;
+
     @JsonProperty("isArchived")
     private Boolean isArchived = false;
 

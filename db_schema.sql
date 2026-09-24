@@ -327,6 +327,23 @@ CREATE TABLE IF NOT EXISTS casbox_messages (
 ) ENGINE=InnoDB;
 
 -- ==========================================
+-- TABLE: CONTACT_ALIASES (Custom display names for contacts per user)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS contact_aliases (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    owner_user_id BIGINT NOT NULL,
+    contact_user_id BIGINT NOT NULL,
+    custom_name VARCHAR(150) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_owner_contact_user (owner_user_id, contact_user_id),
+    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (contact_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_alias_owner (owner_user_id),
+    INDEX idx_alias_contact (contact_user_id)
+) ENGINE=InnoDB;
+
+-- ==========================================
 -- SAMPLE DATA
 -- ==========================================
 INSERT IGNORE INTO users (username, email, password, first_name, last_name, role) 
