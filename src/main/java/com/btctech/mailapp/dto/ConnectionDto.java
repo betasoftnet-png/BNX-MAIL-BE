@@ -20,6 +20,7 @@ public class ConnectionDto {
     private String contactEmail;
     private String contactDisplayName;
     private String contactProfilePicture;
+    private String contactProfilePictureUrl;
     private String status; // "CONNECTED", "DISCONNECTED", "ACCEPTED"
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

@@ -17,6 +17,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -144,6 +147,8 @@ public class ConnectionService {
                     status = "CONNECTED";
                 }
 
+                String profilePicUrl = resolveProfilePictureUrl(contactUser);
+
                 dtos.add(ConnectionDto.builder()
                         .id(c.getId())
                         .requesterId(c.getRequesterId())
@@ -152,7 +157,8 @@ public class ConnectionService {
                         .contactUsername(contactUser.getUsername())
                         .contactEmail(contactUser.getEmail())
                         .contactDisplayName(displayName)
-                        .contactProfilePicture(contactUser.getProfilePicture())
+                        .contactProfilePicture(profilePicUrl)
+                        .contactProfilePictureUrl(profilePicUrl)
                         .status(status)
                         .createdAt(c.getCreatedAt())
                         .updatedAt(c.getUpdatedAt())
@@ -256,6 +262,8 @@ public class ConnectionService {
 
         log.info("Connection {} status updated to {} by user {}", saved.getId(), normalizedStatus, user.getId());
 
+        String profilePicUrl = resolveProfilePictureUrl(contactUser);
+
         return ConnectionDto.builder()
                 .id(saved.getId())
                 .requesterId(saved.getRequesterId())
@@ -264,7 +272,8 @@ public class ConnectionService {
                 .contactUsername(contactUser != null ? contactUser.getUsername() : null)
                 .contactEmail(contactUser != null ? contactUser.getEmail() : null)
                 .contactDisplayName(displayName)
-                .contactProfilePicture(contactUser != null ? contactUser.getProfilePicture() : null)
+                .contactProfilePicture(profilePicUrl)
+                .contactProfilePictureUrl(profilePicUrl)
                 .status(normalizedStatus)
                 .createdAt(saved.getCreatedAt())
                 .updatedAt(saved.getUpdatedAt())
@@ -344,5 +353,41 @@ public class ConnectionService {
         }
 
         return null;
+    }
+
+    public String resolveProfilePictureUrl(User user) {
+        if (user == null || user.getProfilePicture() == null || user.getProfilePicture().trim().isEmpty()) {
+            return null;
+        }
+        String pic = user.getProfilePicture().trim();
+
+        // If it's already an absolute URL or data URI
+        if (pic.startsWith("http://") || pic.startsWith("https://") || pic.startsWith("data:") || pic.startsWith("blob:")) {
+            return pic;
+        }
+
+        // If it's already an API path
+        if (pic.startsWith("/api/")) {
+            return pic;
+        }
+
+        // Check if the stored file actually exists on the filesystem
+        try {
+            Path filePath = Paths.get("uploads/profile-pictures").resolve(pic);
+            if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
+                log.debug("Profile picture file {} for user {} does not exist on disk", pic, user.getUsername());
+                return null;
+            }
+        } catch (Exception e) {
+            log.warn("Error checking profile picture file existence: {}", e.getMessage());
+            return null;
+        }
+
+        // Return the standard, accessible API path using username or email
+        String identifier = user.getUsername() != null && !user.getUsername().trim().isEmpty()
+                ? user.getUsername().trim()
+                : (user.getEmail() != null && !user.getEmail().trim().isEmpty() ? user.getEmail().trim() : String.valueOf(user.getId()));
+
+        return "/api/users/profile-picture/" + identifier;
     }
 }

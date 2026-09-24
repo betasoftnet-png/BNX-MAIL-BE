@@ -218,8 +218,10 @@ public class ProfilePictureController {
      * GET: Public retrieval of profile picture. Resolves mail account first, then falls back to user.
      * Serves dynamic SVG initials avatar if none is set.
      */
-    @GetMapping("/users/profile-picture/{usernameOrEmail}")
-    public ResponseEntity<?> getProfilePicture(@PathVariable String usernameOrEmail) {
+    @GetMapping("/users/profile-picture/{usernameOrEmail:.+}")
+    public ResponseEntity<?> getProfilePicture(
+            @PathVariable String usernameOrEmail,
+            @RequestParam(value = "fallback", required = false, defaultValue = "false") boolean fallback) {
         try {
             String profilePictureFilename = null;
             String displayName = usernameOrEmail;
@@ -251,6 +253,16 @@ public class ProfilePictureController {
                         }
                     }
                 }
+            } else if (usernameOrEmail.matches("\\d+")) {
+                // User ID identifier
+                Optional<User> userOpt = userRepository.findById(Long.parseLong(usernameOrEmail));
+                if (userOpt.isPresent()) {
+                    User user = userOpt.get();
+                    displayName = user.getFirstName() != null ? user.getFirstName() : user.getUsername();
+                    if (user.getProfilePicture() != null) {
+                        profilePictureFilename = user.getProfilePicture();
+                    }
+                }
             } else {
                 // Username identifier
                 Optional<User> userOpt = userRepository.findByUsername(usernameOrEmail);
@@ -277,16 +289,23 @@ public class ProfilePictureController {
                     return ResponseEntity.ok()
                             .contentType(MediaType.parseMediaType(contentType))
                             .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + file.getName() + "\"")
+                            .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
                             .body(resource);
                 }
             }
 
-            // Fallback: serve generated initials SVG
-            return serveDefaultAvatar(displayName);
+            // If no profile picture or file does not exist:
+            if (fallback) {
+                return serveDefaultAvatar(displayName);
+            }
+            return ResponseEntity.notFound().build();
 
         } catch (Exception e) {
             log.error("Error retrieving profile picture for {}: {}", usernameOrEmail, e.getMessage());
-            return serveDefaultAvatar(usernameOrEmail);
+            if (fallback) {
+                return serveDefaultAvatar(usernameOrEmail);
+            }
+            return ResponseEntity.notFound().build();
         }
     }
 
