@@ -175,11 +175,11 @@ public class MailReceiveController {
             log.info("Get storage quota request from: {}", email);
 
             String token = authHeader.substring(7);
-            String password = sessionService.getPasswordFromSession(token);
-
-            if (password == null) {
-                return ResponseEntity.status(401)
-                        .body(ApiResponse.error("Session expired. Please login again."));
+            String password = null;
+            try {
+                password = sessionService.getPasswordFromSession(token);
+            } catch (Exception e) {
+                log.info("Could not extract password from session (likely OAuth token). Proceeding with doveadm fallback.");
             }
 
             com.btctech.mailapp.dto.StorageQuotaDTO quota = mailReceiveService.getStorageQuota(email, password);

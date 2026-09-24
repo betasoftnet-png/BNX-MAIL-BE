@@ -131,6 +131,25 @@ public class ClientSeedConfig {
                     log.info("Test OAuth client seeded: account-ui");
                 }
             );
+
+            clientAppRepository.findByClientId("beta-storage").ifPresentOrElse(
+                client -> {
+                    log.info("Updating beta-storage OAuth client redirect URI...");
+                    client.setRedirectUri("https://storage.beta-softnet.com,https://www.storage.beta-softnet.com,https://storage.beta-softnet.com/,http://localhost:5173,http://localhost:5173/,http://localhost:3000,http://localhost:3000/");
+                    clientAppRepository.save(client);
+                },
+                () -> {
+                    log.info("Seeding beta-storage OAuth client...");
+                    ClientApp client = ClientApp.builder()
+                            .clientId("beta-storage")
+                            .clientSecret("secure-storage-secret-2026")
+                            .appName("Beta Storage")
+                            .redirectUri("https://storage.beta-softnet.com,https://www.storage.beta-softnet.com,https://storage.beta-softnet.com/,http://localhost:5173,http://localhost:5173/,http://localhost:3000,http://localhost:3000/")
+                            .build();
+                    clientAppRepository.save(client);
+                    log.info("Test OAuth client seeded: beta-storage");
+                }
+            );
         };
     }
 }
