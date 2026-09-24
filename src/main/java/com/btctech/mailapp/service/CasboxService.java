@@ -21,24 +21,43 @@ public class CasboxService {
     private final CasboxMessageRepository casboxMessageRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final ContactAliasService contactAliasService;
+    private final ConnectionService connectionService;
 
     @Autowired
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate,
-                         ContactAliasService contactAliasService) {
+                         ContactAliasService contactAliasService,
+                         @org.springframework.context.annotation.Lazy ConnectionService connectionService) {
         this.casboxMessageRepository = casboxMessageRepository;
         this.messagingTemplate = messagingTemplate;
         this.contactAliasService = contactAliasService;
+        this.connectionService = connectionService;
+    }
+
+    public CasboxService(CasboxMessageRepository casboxMessageRepository,
+                         SimpMessagingTemplate messagingTemplate,
+                         ContactAliasService contactAliasService) {
+        this(casboxMessageRepository, messagingTemplate, contactAliasService, null);
     }
 
     // Backwards-compatible constructor for testing and mock setups
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate) {
-        this(casboxMessageRepository, messagingTemplate, null);
+        this(casboxMessageRepository, messagingTemplate, null, null);
     }
 
     @Transactional
     public CasboxMessageDto sendMessage(String senderEmail, CasboxSendRequest request) {
+        if (connectionService != null) {
+            com.btctech.mailapp.entity.User sender = connectionService.resolveUser(senderEmail);
+            com.btctech.mailapp.entity.User receiver = connectionService.resolveUser(request.getReceiverEmail());
+            if (sender != null && receiver != null) {
+                if (!connectionService.isConnectionActive(sender.getId(), receiver.getId())) {
+                    throw new com.btctech.mailapp.exception.MailException("Cannot send message. This connection is disconnected.");
+                }
+            }
+        }
+
         CasboxMessage message = new CasboxMessage();
         message.setSenderEmail(senderEmail);
         message.setReceiverEmail(request.getReceiverEmail());
@@ -87,8 +106,34 @@ public class CasboxService {
     @Transactional(readOnly = true)
     public List<CasboxMessageDto> getAllMessages(String userEmail) {
         Map<String, String> aliasMap = getAliasLookupMap(userEmail);
+        java.util.Set<String> disconnectedIdentifiers = Collections.emptySet();
+        if (connectionService != null && userEmail != null) {
+            try {
+                com.btctech.mailapp.entity.User user = connectionService.resolveUser(userEmail);
+                if (user != null) {
+                    disconnectedIdentifiers = connectionService.getDisconnectedContactIdentifiers(user.getId());
+                }
+            } catch (Exception ignored) {}
+        }
+
+        final java.util.Set<String> disconnected = disconnectedIdentifiers;
         return casboxMessageRepository.findAllMessagesForUser(userEmail)
                 .stream()
+                .filter(m -> {
+                    if (disconnected == null || disconnected.isEmpty()) return true;
+                    String otherEmail = userEmail != null && userEmail.equalsIgnoreCase(m.getSenderEmail())
+                            ? m.getReceiverEmail() : m.getSenderEmail();
+                    if (otherEmail != null) {
+                        if (disconnected.contains(otherEmail.toLowerCase())) {
+                            return false;
+                        }
+                        String otherUser = extractUsername(otherEmail);
+                        if (otherUser != null && disconnected.contains(otherUser.toLowerCase())) {
+                            return false;
+                        }
+                    }
+                    return true;
+                })
                 .map(m -> convertToDto(m, userEmail, aliasMap))
                 .collect(Collectors.toList());
     }

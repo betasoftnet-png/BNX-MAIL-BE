@@ -344,6 +344,24 @@ CREATE TABLE IF NOT EXISTS contact_aliases (
 ) ENGINE=InnoDB;
 
 -- ==========================================
+-- TABLE: CONNECTIONS (Contact connection status: PENDING, ACCEPTED, CONNECTED, DISCONNECTED, REJECTED)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS connections (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    requester_id BIGINT NOT NULL,
+    receiver_id BIGINT NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'CONNECTED',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_requester_receiver (requester_id, receiver_id),
+    FOREIGN KEY (requester_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_conn_requester (requester_id),
+    INDEX idx_conn_receiver (receiver_id),
+    INDEX idx_conn_status (status)
+) ENGINE=InnoDB;
+
+-- ==========================================
 -- SAMPLE DATA
 -- ==========================================
 INSERT IGNORE INTO users (username, email, password, first_name, last_name, role) 

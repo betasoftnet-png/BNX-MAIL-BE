@@ -58,6 +58,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/blocked-contacts/**").authenticated() // ✅ Blocked contacts API
                         .requestMatchers("/api/casbox/**").authenticated()
                         .requestMatchers("/api/contact-aliases/**").authenticated()
+                        .requestMatchers("/api/connections/**").authenticated()
 
                         // Any other request requires authentication
                         .anyRequest().authenticated())

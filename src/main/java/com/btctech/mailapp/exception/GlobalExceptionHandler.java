@@ -36,6 +36,16 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle AccessDeniedException → 403 Forbidden
+     */
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Object>> handleAccessDeniedException(org.springframework.security.access.AccessDeniedException ex) {
+        log.warn("AccessDeniedException: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResponse.error(ex.getMessage()));
+    }
+
+    /**
      * Handle validation errors → 400 Bad Request with field details
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
