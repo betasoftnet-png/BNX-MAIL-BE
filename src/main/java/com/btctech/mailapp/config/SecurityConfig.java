@@ -100,8 +100,8 @@ public class SecurityConfig {
             "https://bit-tool.com/",
             "https://bit-tool.com",
             "https://www.bit-tool.com",
-            "https://www.bit-tool.com/"
-    
+            "https://www.bit-tool.com/",
+            "https://storage.beta-softnet.com"
         ));
 
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));

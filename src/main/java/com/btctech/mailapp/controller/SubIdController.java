@@ -116,4 +116,33 @@ public class SubIdController {
             return ResponseEntity.badRequest().body(ApiResponse.error("Failed to list Sub-IDs: " + e.getMessage()));
         }
     }
+
+    @PutMapping("/{subId}/permissions")
+    public ResponseEntity<ApiResponse<Void>> updatePermissions(
+            @PathVariable Long subId,
+            @RequestBody List<Integer> permissions,
+            @RequestHeader("Authorization") String authHeader) {
+        try {
+            String token = authHeader.substring(7);
+            String identifier = jwtUtil.extractEmail(token);
+            User parent = userRepository.findByEmail(identifier)
+                    .orElseGet(() -> userRepository.findByUsername(identifier)
+                    .orElseThrow(() -> new RuntimeException("Parent user not found")));
+
+            User subUser = userRepository.findById(subId)
+                    .orElseThrow(() -> new RuntimeException("Sub-ID not found"));
+
+            if (subUser.getParent() == null || !subUser.getParent().getId().equals(parent.getId())) {
+                return ResponseEntity.status(403).body(ApiResponse.error("Unauthorized to modify this Sub-ID"));
+            }
+
+            subUser.setPermissions(permissions != null ? new java.util.ArrayList<>(permissions) : new java.util.ArrayList<>());
+            userRepository.save(subUser);
+
+            return ResponseEntity.ok(ApiResponse.success(null, "Permissions updated successfully"));
+        } catch (Exception e) {
+            log.error("Failed to update permissions", e);
+            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to update permissions: " + e.getMessage()));
+        }
+    }
 }
