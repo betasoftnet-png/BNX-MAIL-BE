@@ -53,7 +53,21 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """);
 
-            log.info("Database tables contact_aliases and connections are verified and ready.");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS processed_emails (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_email VARCHAR(150) NOT NULL,
+                    message_identifier VARCHAR(255) NOT NULL,
+                    sender_email VARCHAR(150),
+                    subject VARCHAR(255),
+                    folder VARCHAR(50),
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_user_message_identifier (user_email, message_identifier),
+                    INDEX idx_user_processed (user_email)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            log.info("Database tables contact_aliases, connections, and processed_emails are verified and ready.");
         } catch (Exception e) {
             log.error("Could not automatically create/verify tables: {}", e.getMessage());
         }

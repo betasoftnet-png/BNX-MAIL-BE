@@ -10,10 +10,16 @@ import com.btctech.mailapp.entity.MailLabelMapping;
 
 import com.btctech.mailapp.entity.BlockedContact;
 import com.btctech.mailapp.repository.BlockedContactRepository;
+import com.btctech.mailapp.entity.ProcessedEmail;
+import com.btctech.mailapp.repository.ProcessedEmailRepository;
+import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
 
 
 import com.btctech.mailapp.dto.EmailDTO;
@@ -58,6 +64,7 @@ public class MailReceiveService {
     private final SnoozedEmailRepository snoozedEmailRepository;
     private final MailLabelMappingRepository labelMappingRepository;
     private final BlockedContactRepository blockedContactRepository;
+    private final ProcessedEmailRepository processedEmailRepository;
 
 
     /**
@@ -71,6 +78,11 @@ public class MailReceiveService {
 
         try {
             store = connect(email, password);
+
+            // Ensure any pending unsubscribed sender emails in INBOX are safely and idempotently moved to Spam
+            if ("INBOX".equalsIgnoreCase(folderName) || "Spam".equalsIgnoreCase(folderName)) {
+                processUnsubscribedEmails(store, email);
+            }
 
             String actualFolderName = folderName;
             if ("Sent".equalsIgnoreCase(folderName)) {
@@ -86,8 +98,6 @@ public class MailReceiveService {
             } else if ("Drafts".equalsIgnoreCase(folderName) || "Draft".equalsIgnoreCase(folderName)) {
                 actualFolderName = resolveDraftsFolderName(store);
             }
-
-
 
             folder = store.getFolder(actualFolderName);
             log.info("Attempting to open folder: '{}' (Resolved from: '{}')", actualFolderName, folderName);
@@ -105,6 +115,51 @@ public class MailReceiveService {
             }
 
             UIDFolder uidFolder = (folder instanceof UIDFolder) ? (UIDFolder) folder : null;
+
+            // SPECIAL HANDLING FOR SPAM:
+            // Deduplicate by Message-ID / fingerprint so duplicate copies from repeated processing
+            // or previous runs NEVER produce duplicate items or inflated spam counts.
+            if ("Spam".equalsIgnoreCase(folderName)) {
+                int totalInFolder = folder.getMessageCount();
+                if (totalInFolder == 0) return new FolderResult(new ArrayList<>(), 0);
+
+                Message[] allSpam = folder.getMessages();
+                FetchProfile fp = new FetchProfile();
+                fp.add(FetchProfile.Item.ENVELOPE);
+                fp.add("Message-ID");
+                if (folder instanceof UIDFolder) {
+                    fp.add(UIDFolder.FetchProfileItem.UID);
+                }
+                folder.fetch(allSpam, fp);
+
+                Set<String> seenIds = new HashSet<>();
+                List<Message> uniqueSpamMessages = new ArrayList<>();
+                // Iterate newest to oldest to show latest copy of unique messages
+                for (int i = allSpam.length - 1; i >= 0; i--) {
+                    Message sm = allSpam[i];
+                    String identifier = getMessageIdentifier(sm, email);
+                    if (identifier != null && seenIds.add(identifier)) {
+                        uniqueSpamMessages.add(sm);
+                    }
+                }
+
+                int uniqueCount = uniqueSpamMessages.size();
+                int start = (page - 1) * limit;
+                int end = Math.min(start + limit, uniqueCount);
+
+                List<EmailDTO> spamEmails = new ArrayList<>();
+                if (start < uniqueCount) {
+                    for (int i = start; i < end; i++) {
+                        try {
+                            spamEmails.add(convertToDTO(uniqueSpamMessages.get(i), uidFolder, email));
+                        } catch (Exception e) {
+                            log.warn("Failed to parse spam message: {}", e.getMessage());
+                        }
+                    }
+                }
+                return new FolderResult(spamEmails, uniqueCount);
+            }
+
             int messageCount = folder.getMessageCount();
 
             if (messageCount == 0) return new FolderResult(new ArrayList<>(), 0);
@@ -146,14 +201,7 @@ public class MailReceiveService {
                                             sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
                                             LocalDateTime.now();
                                     if (!msgTime.isBefore(blockedAt)) {
-                                        try {
-                                            Folder spamFolder = store.getFolder(resolveSpamFolderName(store));
-                                            if (!spamFolder.exists()) spamFolder.create(Folder.HOLDS_MESSAGES);
-                                            folder.copyMessages(new Message[]{msg}, spamFolder);
-                                            msg.setFlag(Flags.Flag.DELETED, true);
-                                        } catch (Exception ex) {
-                                            log.warn("Could not move blocked message to Spam IMAP folder: {}", ex.getMessage());
-                                        }
+                                        // Unsubscribed sender email: already processed or skipped from INBOX
                                         continue;
                                     }
                                 }
@@ -871,6 +919,7 @@ public class MailReceiveService {
         Folder inbox = null;
         try {
             store = connect(email, password);
+            processUnsubscribedEmails(store, email);
 
             inbox = store.getFolder("INBOX");
             inbox.open(Folder.READ_ONLY);
@@ -931,6 +980,7 @@ public class MailReceiveService {
 
         try {
             store = connect(email, password);
+            processUnsubscribedEmails(store, email);
             folder = store.getFolder("INBOX");
             
             if (!folder.exists()) {
@@ -1380,7 +1430,224 @@ public class MailReceiveService {
                 .distinct()
                 .collect(java.util.stream.Collectors.toList()));
 
+        String msgId = extractMessageId(message);
+        if (msgId == null || msgId.trim().isEmpty()) {
+            msgId = generateEmailFingerprint(dto.getFrom(), userEmail, dto.getSentDate(), dto.getReceivedDate(), dto.getSubject(), dto.getBody());
+        }
+        dto.setMessageId(msgId);
+
         return dto;
+    }
+
+    public String extractMessageId(Message message) {
+        if (message == null) return null;
+        try {
+            if (message instanceof MimeMessage mimeMsg) {
+                String msgId = mimeMsg.getMessageID();
+                if (msgId != null && !msgId.trim().isEmpty()) {
+                    return cleanMessageId(msgId);
+                }
+            }
+            String[] headers = message.getHeader("Message-ID");
+            if (headers != null && headers.length > 0 && headers[0] != null && !headers[0].trim().isEmpty()) {
+                return cleanMessageId(headers[0]);
+            }
+        } catch (Exception e) {
+            log.debug("Could not extract Message-ID: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    public String cleanMessageId(String messageId) {
+        if (messageId == null) return null;
+        String clean = messageId.trim();
+        if (clean.startsWith("<") && clean.endsWith(">")) {
+            clean = clean.substring(1, clean.length() - 1).trim();
+        }
+        return clean;
+    }
+
+    public String sha256Hex(String text) {
+        if (text == null) return "";
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(text.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            return String.valueOf(text.hashCode());
+        }
+    }
+
+    public String generateEmailFingerprint(String sender, String recipient, java.util.Date sentDate, java.util.Date receivedDate, String subject, String body) {
+        String cleanSender = sender != null ? sender.trim().toLowerCase() : "";
+        String cleanRecipient = recipient != null ? recipient.trim().toLowerCase() : "";
+        long timestamp = sentDate != null ? sentDate.getTime() : (receivedDate != null ? receivedDate.getTime() : 0L);
+        String cleanSubject = subject != null ? subject.trim() : "";
+        String cleanBodyHash = body != null ? sha256Hex(body.trim()) : "";
+
+        return "fp:" + sha256Hex(cleanSender + "|" + cleanRecipient + "|" + timestamp + "|" + cleanSubject + "|" + cleanBodyHash);
+    }
+
+    public String getMessageIdentifier(Message message, String recipient) {
+        String msgId = extractMessageId(message);
+        if (msgId != null && !msgId.isEmpty()) {
+            return msgId;
+        }
+        try {
+            Address[] from = message.getFrom();
+            String sender = from != null && from.length > 0 ? extractEmailAddress(from[0].toString()) : "";
+            java.util.Date sentDate = message.getSentDate();
+            java.util.Date receivedDate = message.getReceivedDate();
+            String subject = message.getSubject();
+            String[] content = extractContent(message);
+            String body = content != null && content.length > 0 ? content[0] : "";
+            return generateEmailFingerprint(sender, recipient, sentDate, receivedDate, subject, body);
+        } catch (Exception e) {
+            log.warn("Failed to generate fallback fingerprint: {}", e.getMessage());
+            return "msg-fp-" + message.getMessageNumber();
+        }
+    }
+
+    /**
+     * Process incoming emails from unsubscribed senders in INBOX:
+     * Moves them to SPAM idempotently with duplicate prevention check.
+     */
+    private void processUnsubscribedEmails(Store store, String userEmail) {
+        if (store == null || userEmail == null || userEmail.trim().isEmpty()) return;
+
+        List<BlockedContact> blockedList = blockedContactRepository.findByUserEmail(userEmail);
+        if (blockedList == null || blockedList.isEmpty()) {
+            return;
+        }
+
+        Map<String, LocalDateTime> blockedMap = new HashMap<>();
+        for (BlockedContact c : blockedList) {
+            if (c.getBlockedEmail() != null) {
+                blockedMap.put(c.getBlockedEmail().toLowerCase().trim(), c.getBlockedAt() != null ? c.getBlockedAt() : LocalDateTime.MIN);
+            }
+        }
+        if (blockedMap.isEmpty()) return;
+
+        Folder inbox = null;
+        Folder spamFolder = null;
+        try {
+            inbox = store.getFolder("INBOX");
+            if (!inbox.exists() || inbox.getMessageCount() == 0) {
+                return;
+            }
+
+            inbox.open(Folder.READ_WRITE);
+
+            String spamName = resolveSpamFolderName(store);
+            spamFolder = store.getFolder(spamName);
+            if (!spamFolder.exists()) {
+                spamFolder.create(Folder.HOLDS_MESSAGES);
+            }
+            if (!spamFolder.isOpen()) {
+                spamFolder.open(Folder.READ_WRITE);
+            }
+
+            // Preload existing message identifiers in Spam to prevent duplicates
+            Set<String> existingSpamIdentifiers = new HashSet<>();
+            try {
+                int spamCount = spamFolder.getMessageCount();
+                if (spamCount > 0) {
+                    Message[] spamMsgs = spamFolder.getMessages();
+                    FetchProfile fp = new FetchProfile();
+                    fp.add(FetchProfile.Item.ENVELOPE);
+                    fp.add("Message-ID");
+                    spamFolder.fetch(spamMsgs, fp);
+                    for (Message sm : spamMsgs) {
+                        try {
+                            String id = extractMessageId(sm);
+                            if (id != null && !id.isEmpty()) {
+                                existingSpamIdentifiers.add(id);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Could not preload spam identifiers: {}", e.getMessage());
+            }
+
+            Message[] messages = inbox.getMessages();
+            boolean inboxModified = false;
+
+            for (Message msg : messages) {
+                try {
+                    if (msg.isSet(Flags.Flag.DELETED)) {
+                        continue;
+                    }
+                    Address[] from = msg.getFrom();
+                    if (from == null || from.length == 0) continue;
+                    String cleanFrom = extractEmailAddress(from[0].toString());
+                    if (cleanFrom == null) continue;
+                    String senderLower = cleanFrom.toLowerCase().trim();
+
+                    if (blockedMap.containsKey(senderLower)) {
+                        LocalDateTime blockedAt = blockedMap.get(senderLower);
+                        java.util.Date sentDate = msg.getSentDate();
+                        LocalDateTime msgTime = (sentDate != null) ?
+                                sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
+                                LocalDateTime.now();
+
+                        if (!msgTime.isBefore(blockedAt)) {
+                            // Message is from an unsubscribed sender
+                            String messageId = getMessageIdentifier(msg, userEmail);
+
+                            boolean alreadyProcessedInDb = processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId);
+                            boolean alreadyInSpam = (messageId != null && existingSpamIdentifiers.contains(messageId));
+
+                            if (alreadyProcessedInDb || alreadyInSpam) {
+                                log.info("Message [{}] already processed/exists in Spam for recipient {}. Skipping duplicate insert.", messageId, userEmail);
+                            } else {
+                                inbox.copyMessages(new Message[]{msg}, spamFolder);
+                                log.info("✓ Moved email [{}] from unsubscribed sender {} to Spam for recipient {}", messageId, senderLower, userEmail);
+                                if (messageId != null) {
+                                    existingSpamIdentifiers.add(messageId);
+                                }
+
+                                try {
+                                    ProcessedEmail pe = ProcessedEmail.builder()
+                                            .userEmail(userEmail)
+                                            .messageIdentifier(messageId != null ? messageId : ("msg-" + System.currentTimeMillis()))
+                                            .senderEmail(senderLower)
+                                            .subject(msg.getSubject())
+                                            .folder("SPAM")
+                                            .processedAt(LocalDateTime.now())
+                                            .build();
+                                    processedEmailRepository.save(pe);
+                                } catch (Exception dbEx) {
+                                    log.warn("Processed email save note: {}", dbEx.getMessage());
+                                }
+                            }
+
+                            // Mark deleted in INBOX so it is removed from INBOX
+                            msg.setFlag(Flags.Flag.DELETED, true);
+                            inboxModified = true;
+                        }
+                    }
+                } catch (Exception ex) {
+                    log.warn("Error processing inbox message for unsubscribe check: {}", ex.getMessage());
+                }
+            }
+
+            if (inboxModified) {
+                inbox.expunge();
+            }
+
+        } catch (Exception e) {
+            log.error("Failed to process unsubscribed emails for user {}: {}", userEmail, e.getMessage(), e);
+        } finally {
+            try { if (spamFolder != null && spamFolder.isOpen()) spamFolder.close(false); } catch (Exception ignored) {}
+            try { if (inbox != null && inbox.isOpen()) inbox.close(true); } catch (Exception ignored) {}
+        }
     }
 
     private String extractEmailAddress(String fromHeader) {

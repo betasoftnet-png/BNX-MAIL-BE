@@ -362,6 +362,21 @@ CREATE TABLE IF NOT EXISTS connections (
 ) ENGINE=InnoDB;
 
 -- ==========================================
+-- TABLE: PROCESSED_EMAILS (Idempotency and duplicate prevention)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS processed_emails (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_email VARCHAR(150) NOT NULL,
+    message_identifier VARCHAR(255) NOT NULL,
+    sender_email VARCHAR(150),
+    subject VARCHAR(255),
+    folder VARCHAR(50),
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_message_identifier (user_email, message_identifier),
+    INDEX idx_user_processed (user_email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==========================================
 -- SAMPLE DATA
 -- ==========================================
 INSERT IGNORE INTO users (username, email, password, first_name, last_name, role) 
