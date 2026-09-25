@@ -735,6 +735,38 @@ public class MailReceiveController {
     }
 
     /**
+     * Clear all spam (move all to trash)
+     */
+    @PostMapping("/spam/clear")
+    public ResponseEntity<ApiResponse<Void>> clearSpam(
+            @RequestHeader("Authorization") String authHeader,
+            Authentication authentication) {
+
+        try {
+            String email = authentication.getName();
+            log.info("Clear all spam request from {}", email);
+
+            String token = authHeader.substring(7);
+            String password = sessionService.getPasswordFromSession(token);
+
+            if (password == null) {
+                return ResponseEntity.status(401)
+                        .body(ApiResponse.error("Session expired. Please login again."));
+            }
+
+            mailReceiveService.clearSpam(email, password);
+
+            return ResponseEntity.ok(
+                    ApiResponse.success(null, "All spam moved to trash successfully"));
+
+        } catch (Throwable e) {
+            log.error("CRITICAL error clearing spam for {}: {}", authentication.getName(), e.getMessage(), e);
+            return ResponseEntity.status(500)
+                    .body(ApiResponse.error("Failed to clear spam: " + e.getMessage()));
+        }
+    }
+
+    /**
      * Mark as spam
      */
     @PostMapping("/spam/{uid}")

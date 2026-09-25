@@ -596,131 +596,178 @@ public class MailReceiveService {
 
 
     public String moveMessage(String email, String password, String sourceFolderName, String uid, String targetFolderAlias) {
-        Store store = null;
-        Folder source = null;
-        Folder target = null;
-        String resultingUid = uid;
+        synchronized (email.intern()) {
+            Store store = null;
+            Folder source = null;
+            Folder target = null;
+            String resultingUid = uid;
 
-        try {
-            store = connect(email, password);
+            try {
+                store = connect(email, password);
 
-            String resolvedTargetFolderName;
-            if ("Trash".equalsIgnoreCase(targetFolderAlias)) {
-                resolvedTargetFolderName = resolveTrashFolderName(store);
-            } else if ("Spam".equalsIgnoreCase(targetFolderAlias)) {
-                resolvedTargetFolderName = resolveSpamFolderName(store);
-            } else if ("Snoozed".equalsIgnoreCase(targetFolderAlias)) {
-                resolvedTargetFolderName = resolveSnoozedFolderName(store);
-            } else if ("Archive".equalsIgnoreCase(targetFolderAlias)) {
-                resolvedTargetFolderName = resolveArchiveFolderName(store);
-            } else {
-                resolvedTargetFolderName = targetFolderAlias;
-            }
-
-
-            target = store.getFolder(resolvedTargetFolderName);
-            if (!target.exists()) target.create(Folder.HOLDS_MESSAGES);
-
-            String resolvedSourceFolderName = sourceFolderName;
-            if (sourceFolderName != null) {
-                String upper = sourceFolderName.toUpperCase();
-                if (upper.contains("STARRED")) {
-                    var list = starredEmailRepository.findByUserEmailAndUid(email, uid);
-                    if (!list.isEmpty()) resolvedSourceFolderName = list.get(0).getFolderName();
-                    else resolvedSourceFolderName = "INBOX";
-                } else if (upper.contains("ALLMAIL") || upper.contains("ALL-MAIL")) {
-                    resolvedSourceFolderName = "INBOX";
-                } else if (upper.contains("LABEL")) {
-                    var list = labelMappingRepository.findByUserEmailAndEmailUid(email, uid);
-                    if (!list.isEmpty()) resolvedSourceFolderName = list.get(0).getFolderName();
-                    else resolvedSourceFolderName = "INBOX";
+                String resolvedTargetFolderName;
+                if ("Trash".equalsIgnoreCase(targetFolderAlias)) {
+                    resolvedTargetFolderName = resolveTrashFolderName(store);
+                } else if ("Spam".equalsIgnoreCase(targetFolderAlias)) {
+                    resolvedTargetFolderName = resolveSpamFolderName(store);
+                } else if ("Snoozed".equalsIgnoreCase(targetFolderAlias)) {
+                    resolvedTargetFolderName = resolveSnoozedFolderName(store);
+                } else if ("Archive".equalsIgnoreCase(targetFolderAlias)) {
+                    resolvedTargetFolderName = resolveArchiveFolderName(store);
+                } else {
+                    resolvedTargetFolderName = targetFolderAlias;
                 }
 
-                if ("Sent".equalsIgnoreCase(resolvedSourceFolderName)) {
-                    resolvedSourceFolderName = resolveSentFolderName(store);
-                } else if ("Trash".equalsIgnoreCase(resolvedSourceFolderName)) {
-                    resolvedSourceFolderName = resolveTrashFolderName(store);
-                } else if ("Spam".equalsIgnoreCase(resolvedSourceFolderName)) {
-                    resolvedSourceFolderName = resolveSpamFolderName(store);
-                } else if ("Snoozed".equalsIgnoreCase(resolvedSourceFolderName)) {
-                    resolvedSourceFolderName = resolveSnoozedFolderName(store);
-                } else if ("Archive".equalsIgnoreCase(resolvedSourceFolderName)) {
-                    resolvedSourceFolderName = resolveArchiveFolderName(store);
-                } else if ("Drafts".equalsIgnoreCase(resolvedSourceFolderName) || "Draft".equalsIgnoreCase(resolvedSourceFolderName)) {
-                    resolvedSourceFolderName = resolveDraftsFolderName(store);
-                }
-            }
+                target = store.getFolder(resolvedTargetFolderName);
+                if (!target.exists()) target.create(Folder.HOLDS_MESSAGES);
 
-            String[] candidateFolders = { resolvedSourceFolderName, "INBOX", resolveSentFolderName(store), resolveArchiveFolderName(store) };
-            Message message = null;
-            for (String candidate : candidateFolders) {
-                if (candidate == null || candidate.toUpperCase().contains("STARRED") || candidate.toUpperCase().contains("ALL") || candidate.toUpperCase().contains("LABEL")) continue;
+                String resolvedSourceFolderName = sourceFolderName;
+                if (sourceFolderName != null) {
+                    String upper = sourceFolderName.toUpperCase();
+                    if (upper.contains("STARRED")) {
+                        var list = starredEmailRepository.findByUserEmailAndUid(email, uid);
+                        if (!list.isEmpty()) resolvedSourceFolderName = list.get(0).getFolderName();
+                        else resolvedSourceFolderName = "INBOX";
+                    } else if (upper.contains("ALLMAIL") || upper.contains("ALL-MAIL")) {
+                        resolvedSourceFolderName = "INBOX";
+                    } else if (upper.contains("LABEL")) {
+                        var list = labelMappingRepository.findByUserEmailAndEmailUid(email, uid);
+                        if (!list.isEmpty()) resolvedSourceFolderName = list.get(0).getFolderName();
+                        else resolvedSourceFolderName = "INBOX";
+                    }
+
+                    if ("Sent".equalsIgnoreCase(resolvedSourceFolderName)) {
+                        resolvedSourceFolderName = resolveSentFolderName(store);
+                    } else if ("Trash".equalsIgnoreCase(resolvedSourceFolderName)) {
+                        resolvedSourceFolderName = resolveTrashFolderName(store);
+                    } else if ("Spam".equalsIgnoreCase(resolvedSourceFolderName)) {
+                        resolvedSourceFolderName = resolveSpamFolderName(store);
+                    } else if ("Snoozed".equalsIgnoreCase(resolvedSourceFolderName)) {
+                        resolvedSourceFolderName = resolveSnoozedFolderName(store);
+                    } else if ("Archive".equalsIgnoreCase(resolvedSourceFolderName)) {
+                        resolvedSourceFolderName = resolveArchiveFolderName(store);
+                    } else if ("Drafts".equalsIgnoreCase(resolvedSourceFolderName) || "Draft".equalsIgnoreCase(resolvedSourceFolderName)) {
+                        resolvedSourceFolderName = resolveDraftsFolderName(store);
+                    }
+                }
+
+                long numericUid;
                 try {
-                    Folder temp = store.getFolder(candidate);
-                    if (temp.exists()) {
-                        temp.open(Folder.READ_WRITE);
-                        if (temp instanceof UIDFolder) {
-                            Message m = ((UIDFolder) temp).getMessageByUID(Long.parseLong(uid));
-                            if (m != null) {
-                                source = temp;
-                                message = m;
-                                break;
+                    numericUid = Long.parseLong(uid);
+                } catch (NumberFormatException nfe) {
+                    log.warn("Invalid non-numeric UID '{}' passed to moveMessage for {}", uid, email);
+                    return uid;
+                }
+
+                List<String> candidateList = new ArrayList<>();
+                if (resolvedSourceFolderName != null) {
+                    candidateList.add(resolvedSourceFolderName);
+                }
+                if (!candidateList.contains("INBOX")) {
+                    candidateList.add("INBOX");
+                }
+
+                Message message = null;
+                for (String candidate : candidateList) {
+                    if (candidate == null || candidate.toUpperCase().contains("STARRED") || candidate.toUpperCase().contains("ALL") || candidate.toUpperCase().contains("LABEL")) continue;
+                    try {
+                        Folder temp = store.getFolder(candidate);
+                        if (temp.exists()) {
+                            temp.open(Folder.READ_WRITE);
+                            if (temp instanceof UIDFolder) {
+                                Message m = ((UIDFolder) temp).getMessageByUID(numericUid);
+                                if (m != null) {
+                                    source = temp;
+                                    message = m;
+                                    break;
+                                }
+                            }
+                            temp.close(false);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not find message in candidate folder {}: {}", candidate, e.getMessage());
+                    }
+                }
+
+                if (message == null || source == null) {
+                    log.info("Email with UID {} was not found in folder '{}' or candidates for user {}. It may have already been moved or deleted.", uid, resolvedSourceFolderName, email);
+                    return uid;
+                }
+
+                // If moving from Spam, clean up any duplicate copies of the same email in Spam
+                if ("Spam".equalsIgnoreCase(resolvedSourceFolderName)) {
+                    try {
+                        String msgId = extractMessageId(message);
+                        if (msgId != null && !msgId.isEmpty()) {
+                            Message[] allInSource = source.getMessages();
+                            for (Message otherMsg : allInSource) {
+                                if (otherMsg != message && !otherMsg.isSet(Flags.Flag.DELETED)) {
+                                    String otherId = extractMessageId(otherMsg);
+                                    if (msgId.equals(otherId)) {
+                                        otherMsg.setFlag(Flags.Flag.DELETED, true);
+                                        log.info("Marking duplicate copy of [{}] as DELETED in Spam", msgId);
+                                    }
+                                }
                             }
                         }
-                        temp.close(false);
-                    }
-                } catch (Exception e) {
-                    log.debug("Could not find message in candidate folder {}: {}", candidate, e.getMessage());
-                }
-            }
-
-            if (message == null || source == null) {
-                throw new MailException("Email with UID " + uid + " could not be found in any folder.");
-            }
-
-            source.copyMessages(new Message[]{message}, target);
-            try {
-                target.open(Folder.READ_WRITE);
-                if (target instanceof UIDFolder) {
-                    int count = target.getMessageCount();
-                    if (count > 0) {
-                        Message newMsg = target.getMessage(count);
-                        String newUidStr = String.valueOf(((UIDFolder) target).getUID(newMsg));
-                        resultingUid = newUidStr;
-                        log.info("Updating DB mappings from old UID {} to new UID {} in folder {}", uid, newUidStr, resolvedTargetFolderName);
-                        
-                        List<StarredEmail> stars = starredEmailRepository.findByUserEmailAndUid(email, uid);
-                        for (StarredEmail star : stars) {
-                            star.setUid(newUidStr);
-                            star.setFolderName(resolvedTargetFolderName);
-                            starredEmailRepository.save(star);
-                        }
-
-                        List<MailLabelMapping> labels = labelMappingRepository.findByUserEmailAndEmailUid(email, uid);
-                        for (MailLabelMapping label : labels) {
-                            label.setEmailUid(newUidStr);
-                            label.setFolderName(resolvedTargetFolderName);
-                            labelMappingRepository.save(label);
-                        }
+                    } catch (Exception dupEx) {
+                        log.debug("Spam duplicate cleanup notice: {}", dupEx.getMessage());
                     }
                 }
-                target.close(false);
-            } catch (Exception ex) {
-                log.warn("Failed to update UID mapping after copy: {}", ex.getMessage());
+
+                source.copyMessages(new Message[]{message}, target);
+
+                List<StarredEmail> stars = starredEmailRepository.findByUserEmailAndUid(email, uid);
+                List<MailLabelMapping> labels = labelMappingRepository.findByUserEmailAndEmailUid(email, uid);
+
+                if (!stars.isEmpty() || !labels.isEmpty()) {
+                    try {
+                        target.open(Folder.READ_WRITE);
+                        if (target instanceof UIDFolder) {
+                            int count = target.getMessageCount();
+                            if (count > 0) {
+                                Message newMsg = target.getMessage(count);
+                                String newUidStr = String.valueOf(((UIDFolder) target).getUID(newMsg));
+                                resultingUid = newUidStr;
+                                log.info("Updating DB mappings from old UID {} to new UID {} in folder {}", uid, newUidStr, resolvedTargetFolderName);
+
+                                for (StarredEmail star : stars) {
+                                    star.setUid(newUidStr);
+                                    star.setFolderName(resolvedTargetFolderName);
+                                    starredEmailRepository.save(star);
+                                }
+
+                                for (MailLabelMapping label : labels) {
+                                    label.setEmailUid(newUidStr);
+                                    label.setFolderName(resolvedTargetFolderName);
+                                    labelMappingRepository.save(label);
+                                }
+                            }
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Failed to update UID mapping after copy: {}", ex.getMessage());
+                    } finally {
+                        try { if (target != null && target.isOpen()) target.close(false); } catch (Exception ignored) {}
+                    }
+                }
+
+                message.setFlag(Flags.Flag.DELETED, true);
+                try {
+                    source.expunge();
+                } catch (Exception expEx) {
+                    log.debug("Expunge notice for {}: {}", resolvedSourceFolderName, expEx.getMessage());
+                }
+
+                log.info("Successfully moved message {} to {}", uid, resolvedTargetFolderName);
+                return resultingUid;
+
+            } catch (Exception e) {
+                log.error("Failed to move message to {}: {}", targetFolderAlias, e.getMessage(), e);
+                throw new MailException("Failed to move message: " + e.getMessage());
+            } finally {
+                try { if (source != null && source.isOpen()) source.close(false); } catch (Exception e) {}
+                try { if (store != null && store.isConnected()) store.close(); } catch (Exception e) {}
             }
-
-            message.setFlag(Flags.Flag.DELETED, true);
-            source.expunge();
-
-            log.info("Successfully moved message {} to {}", uid, resolvedTargetFolderName);
-            return resultingUid;
-
-        } catch (Exception e) {
-            log.error("Failed to move message to {}: {}", targetFolderAlias, e.getMessage(), e);
-            throw new MailException("Failed to move message: " + e.getMessage());
-        } finally {
-            try { if (source != null && source.isOpen()) source.close(true); } catch (Exception e) {}
-            try { if (store != null) store.close(); } catch (Exception e) {}
         }
     }
 
@@ -735,143 +782,224 @@ public class MailReceiveService {
         restoreFromFolder(email, password, uid, "Spam");
     }
 
+    public void clearSpam(String email, String password) {
+        synchronized (email.intern()) {
+            log.info("Clearing all spam messages to Trash for {}", email);
+            Store store = null;
+            Folder spam = null;
+            Folder trash = null;
+
+            try {
+                store = connect(email, password);
+                String spamName = resolveSpamFolderName(store);
+                String trashName = resolveTrashFolderName(store);
+
+                spam = store.getFolder(spamName);
+                if (!spam.exists() || spam.getMessageCount() == 0) {
+                    log.info("Spam folder is empty or does not exist for {}", email);
+                    return;
+                }
+                spam.open(Folder.READ_WRITE);
+
+                trash = store.getFolder(trashName);
+                if (!trash.exists()) trash.create(Folder.HOLDS_MESSAGES);
+
+                Message[] messages = spam.getMessages();
+                if (messages.length > 0) {
+                    spam.copyMessages(messages, trash);
+                    for (Message m : messages) {
+                        try {
+                            m.setFlag(Flags.Flag.DELETED, true);
+                        } catch (Exception ignored) {}
+                    }
+                    try {
+                        spam.expunge();
+                    } catch (Exception expEx) {
+                        log.debug("Expunge notice for Spam: {}", expEx.getMessage());
+                    }
+                }
+                log.info("Successfully cleared {} spam messages to Trash for {}", messages.length, email);
+            } catch (Exception e) {
+                log.error("Failed to clear spam for {}: {}", email, e.getMessage(), e);
+                throw new MailException("Failed to clear spam: " + e.getMessage());
+            } finally {
+                try { if (spam != null && spam.isOpen()) spam.close(false); } catch (Exception ignored) {}
+                try { if (trash != null && trash.isOpen()) trash.close(false); } catch (Exception ignored) {}
+                try { if (store != null && store.isConnected()) store.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
     private void restoreFromFolder(String email, String password, String uid, String sourceAlias) {
-        Store store = null;
-        Folder source = null;
-        Folder inbox = null;
+        synchronized (email.intern()) {
+            Store store = null;
+            Folder source = null;
+            Folder inbox = null;
 
-        try {
-            store = connect(email, password);
+            try {
+                store = connect(email, password);
 
-            String solvedSource;
-            if ("Trash".equalsIgnoreCase(sourceAlias)) solvedSource = resolveTrashFolderName(store);
-            else if ("Spam".equalsIgnoreCase(sourceAlias)) solvedSource = resolveSpamFolderName(store);
-            else if ("Archive".equalsIgnoreCase(sourceAlias)) solvedSource = resolveArchiveFolderName(store);
-            else solvedSource = sourceAlias;
+                String solvedSource;
+                if ("Trash".equalsIgnoreCase(sourceAlias)) solvedSource = resolveTrashFolderName(store);
+                else if ("Spam".equalsIgnoreCase(sourceAlias)) solvedSource = resolveSpamFolderName(store);
+                else if ("Archive".equalsIgnoreCase(sourceAlias)) solvedSource = resolveArchiveFolderName(store);
+                else solvedSource = sourceAlias;
 
-            source = store.getFolder(solvedSource);
-            source.open(Folder.READ_WRITE);
+                source = store.getFolder(solvedSource);
+                if (!source.exists()) return;
+                source.open(Folder.READ_WRITE);
 
-            if (!(source instanceof UIDFolder)) {
-                throw new MailException(sourceAlias + " folder does not support persistent UIDs.");
-            }
-            UIDFolder uidSource = (UIDFolder) source;
+                if (!(source instanceof UIDFolder)) {
+                    throw new MailException(sourceAlias + " folder does not support persistent UIDs.");
+                }
+                UIDFolder uidSource = (UIDFolder) source;
 
-            long numericUid = Long.parseLong(uid);
-            Message message = uidSource.getMessageByUID(numericUid);
+                long numericUid;
+                try {
+                    numericUid = Long.parseLong(uid);
+                } catch (NumberFormatException nfe) {
+                    log.warn("Invalid UID for restore: {}", uid);
+                    return;
+                }
+                Message message = uidSource.getMessageByUID(numericUid);
 
-            if (message == null) {
-                throw new MailException("Email with UID " + uid + " no longer exists in " + sourceAlias);
-            }
+                if (message == null) {
+                    log.info("Email with UID {} no longer exists in {}", uid, sourceAlias);
+                    return;
+                }
 
-            boolean isDraft = message.isSet(Flags.Flag.DRAFT);
-            boolean isSentMessage = false;
-            
-            if (!isDraft) {
-                Address[] fromAddresses = message.getFrom();
-                if (fromAddresses != null) {
-                    for (Address address : fromAddresses) {
-                        if (address instanceof InternetAddress) {
-                            String fromEmail = ((InternetAddress) address).getAddress();
-                            if (email.equalsIgnoreCase(fromEmail)) {
-                                isSentMessage = true;
-                                break;
+                boolean isDraft = message.isSet(Flags.Flag.DRAFT);
+                boolean isSentMessage = false;
+
+                if (!isDraft) {
+                    Address[] fromAddresses = message.getFrom();
+                    if (fromAddresses != null) {
+                        for (Address address : fromAddresses) {
+                            if (address instanceof InternetAddress) {
+                                String fromEmail = ((InternetAddress) address).getAddress();
+                                if (email.equalsIgnoreCase(fromEmail)) {
+                                    isSentMessage = true;
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            String targetFolderName;
-            if (isDraft) {
-                targetFolderName = resolveDraftsFolderName(store);
-            } else if (isSentMessage) {
-                targetFolderName = resolveSentFolderName(store);
-            } else {
-                targetFolderName = "INBOX";
-            }
-            inbox = store.getFolder(targetFolderName);
-            if (!inbox.exists()) inbox.create(Folder.HOLDS_MESSAGES);
+                String targetFolderName;
+                if (isDraft) {
+                    targetFolderName = resolveDraftsFolderName(store);
+                } else if (isSentMessage) {
+                    targetFolderName = resolveSentFolderName(store);
+                } else {
+                    targetFolderName = "INBOX";
+                }
+                inbox = store.getFolder(targetFolderName);
+                if (!inbox.exists()) inbox.create(Folder.HOLDS_MESSAGES);
 
-            source.copyMessages(new Message[]{message}, inbox);
-            try {
-                inbox.open(Folder.READ_WRITE);
-                if (inbox instanceof UIDFolder) {
-                    int count = inbox.getMessageCount();
-                    if (count > 0) {
-                        Message newMsg = inbox.getMessage(count);
-                        String newUidStr = String.valueOf(((UIDFolder) inbox).getUID(newMsg));
-                        log.info("Updating DB mappings from old UID {} to new UID {} in folder {}", uid, newUidStr, targetFolderName);
-                        
-                        List<StarredEmail> stars = starredEmailRepository.findByUserEmailAndUid(email, uid);
-                        for (StarredEmail star : stars) {
-                            star.setUid(newUidStr);
-                            star.setFolderName(targetFolderName);
-                            starredEmailRepository.save(star);
+                source.copyMessages(new Message[]{message}, inbox);
+
+                List<StarredEmail> stars = starredEmailRepository.findByUserEmailAndUid(email, uid);
+                List<MailLabelMapping> labels = labelMappingRepository.findByUserEmailAndEmailUid(email, uid);
+
+                if (!stars.isEmpty() || !labels.isEmpty()) {
+                    try {
+                        inbox.open(Folder.READ_WRITE);
+                        if (inbox instanceof UIDFolder) {
+                            int count = inbox.getMessageCount();
+                            if (count > 0) {
+                                Message newMsg = inbox.getMessage(count);
+                                String newUidStr = String.valueOf(((UIDFolder) inbox).getUID(newMsg));
+                                log.info("Updating DB mappings from old UID {} to new UID {} in folder {}", uid, newUidStr, targetFolderName);
+
+                                for (StarredEmail star : stars) {
+                                    star.setUid(newUidStr);
+                                    star.setFolderName(targetFolderName);
+                                    starredEmailRepository.save(star);
+                                }
+
+                                for (MailLabelMapping label : labels) {
+                                    label.setEmailUid(newUidStr);
+                                    label.setFolderName(targetFolderName);
+                                    labelMappingRepository.save(label);
+                                }
+                            }
                         }
-
-                        List<MailLabelMapping> labels = labelMappingRepository.findByUserEmailAndEmailUid(email, uid);
-                        for (MailLabelMapping label : labels) {
-                            label.setEmailUid(newUidStr);
-                            label.setFolderName(targetFolderName);
-                            labelMappingRepository.save(label);
-                        }
+                    } catch (Exception ex) {
+                        log.warn("Failed to update UID mapping after restore: {}", ex.getMessage());
+                    } finally {
+                        try { if (inbox != null && inbox.isOpen()) inbox.close(false); } catch (Exception ignored) {}
                     }
                 }
-                inbox.close(false);
-            } catch (Exception ex) {
-                log.warn("Failed to update UID mapping after restore: {}", ex.getMessage());
+
+                message.setFlag(Flags.Flag.DELETED, true);
+                try {
+                    source.expunge();
+                } catch (Exception expEx) {
+                    log.debug("Expunge notice for {}: {}", solvedSource, expEx.getMessage());
+                }
+
+                log.info("Successfully restored message {} from {} to {}", uid, sourceAlias, targetFolderName);
+
+            } catch (Exception e) {
+                log.error("Failed to restore from {}: {}", sourceAlias, e.getMessage(), e);
+                throw new MailException("Failed to restore from " + sourceAlias + ": " + e.getMessage());
+            } finally {
+                try { if (source != null && source.isOpen()) source.close(false); } catch (Exception e) {}
+                try { if (store != null && store.isConnected()) store.close(); } catch (Exception e) {}
             }
-
-            message.setFlag(Flags.Flag.DELETED, true);
-            source.expunge();
-
-            log.info("Successfully restored message {} from {} to {}", uid, sourceAlias, targetFolderName);
-
-        } catch (Exception e) {
-            log.error("Failed to restore from {}: {}", sourceAlias, e.getMessage(), e);
-            throw new MailException("Failed to restore from " + sourceAlias + ": " + e.getMessage());
-        } finally {
-            try { if (source != null && source.isOpen()) source.close(true); } catch (Exception e) {}
-            try { if (store != null) store.close(); } catch (Exception e) {}
         }
     }
 
     public void deletePermanently(String email, String password, String uid) {
-        log.info("Permanently deleting email UID {} from Trash for {}", uid, email);
-        Store store = null;
-        Folder trash = null;
+        synchronized (email.intern()) {
+            log.info("Permanently deleting email UID {} from Trash for {}", uid, email);
+            Store store = null;
+            Folder trash = null;
 
-        try {
-            store = connect(email, password);
+            try {
+                store = connect(email, password);
 
-            String trashName = resolveTrashFolderName(store);
-            trash = store.getFolder(trashName);
-            trash.open(Folder.READ_WRITE);
+                String trashName = resolveTrashFolderName(store);
+                trash = store.getFolder(trashName);
+                if (!trash.exists()) return;
+                trash.open(Folder.READ_WRITE);
 
-            if (!(trash instanceof UIDFolder)) {
-                throw new MailException("Trash folder does not support persistent UIDs.");
+                if (!(trash instanceof UIDFolder)) {
+                    throw new MailException("Trash folder does not support persistent UIDs.");
+                }
+                UIDFolder uidTrash = (UIDFolder) trash;
+
+                long numericUid;
+                try {
+                    numericUid = Long.parseLong(uid);
+                } catch (NumberFormatException nfe) {
+                    log.warn("Invalid UID for permanent delete: {}", uid);
+                    return;
+                }
+                Message message = uidTrash.getMessageByUID(numericUid);
+
+                if (message == null) {
+                    log.info("Email with UID {} no longer exists in Trash for recipient {}", uid, email);
+                    return;
+                }
+
+                message.setFlag(Flags.Flag.DELETED, true);
+                try {
+                    trash.expunge();
+                } catch (Exception expEx) {
+                    log.debug("Expunge notice for Trash: {}", expEx.getMessage());
+                }
+
+                log.info("Successfully deleted message {} permanently", uid);
+
+            } catch (Exception e) {
+                log.error("Failed to delete permanently: {}", e.getMessage(), e);
+                throw new MailException("Failed to delete permanently: " + e.getMessage());
+            } finally {
+                try { if (trash != null && trash.isOpen()) trash.close(false); } catch (Exception e) {}
+                try { if (store != null && store.isConnected()) store.close(); } catch (Exception e) {}
             }
-            UIDFolder uidTrash = (UIDFolder) trash;
-
-            long numericUid = Long.parseLong(uid);
-            Message message = uidTrash.getMessageByUID(numericUid);
-
-            if (message == null) {
-                throw new MailException("Email with UID " + uid + " no longer exists in Trash");
-            }
-
-            message.setFlag(Flags.Flag.DELETED, true);
-            trash.expunge();
-
-            log.info("Successfully deleted message {} permanently", uid);
-
-        } catch (Exception e) {
-            log.error("Failed to delete permanently: {}", e.getMessage(), e);
-            throw new MailException("Failed to delete permanently: " + e.getMessage());
-        } finally {
-            try { if (trash != null && trash.isOpen()) trash.close(true); } catch (Exception e) {}
-            try { if (store != null) store.close(); } catch (Exception e) {}
         }
     }
 
@@ -1521,132 +1649,134 @@ public class MailReceiveService {
     private void processUnsubscribedEmails(Store store, String userEmail) {
         if (store == null || userEmail == null || userEmail.trim().isEmpty()) return;
 
-        List<BlockedContact> blockedList = blockedContactRepository.findByUserEmail(userEmail);
-        if (blockedList == null || blockedList.isEmpty()) {
-            return;
-        }
-
-        Map<String, LocalDateTime> blockedMap = new HashMap<>();
-        for (BlockedContact c : blockedList) {
-            if (c.getBlockedEmail() != null) {
-                blockedMap.put(c.getBlockedEmail().toLowerCase().trim(), c.getBlockedAt() != null ? c.getBlockedAt() : LocalDateTime.MIN);
-            }
-        }
-        if (blockedMap.isEmpty()) return;
-
-        Folder inbox = null;
-        Folder spamFolder = null;
-        try {
-            inbox = store.getFolder("INBOX");
-            if (!inbox.exists() || inbox.getMessageCount() == 0) {
+        synchronized (userEmail.intern()) {
+            List<BlockedContact> blockedList = blockedContactRepository.findByUserEmail(userEmail);
+            if (blockedList == null || blockedList.isEmpty()) {
                 return;
             }
 
-            inbox.open(Folder.READ_WRITE);
-
-            String spamName = resolveSpamFolderName(store);
-            spamFolder = store.getFolder(spamName);
-            if (!spamFolder.exists()) {
-                spamFolder.create(Folder.HOLDS_MESSAGES);
-            }
-            if (!spamFolder.isOpen()) {
-                spamFolder.open(Folder.READ_WRITE);
-            }
-
-            // Preload existing message identifiers in Spam to prevent duplicates
-            Set<String> existingSpamIdentifiers = new HashSet<>();
-            try {
-                int spamCount = spamFolder.getMessageCount();
-                if (spamCount > 0) {
-                    Message[] spamMsgs = spamFolder.getMessages();
-                    FetchProfile fp = new FetchProfile();
-                    fp.add(FetchProfile.Item.ENVELOPE);
-                    fp.add("Message-ID");
-                    spamFolder.fetch(spamMsgs, fp);
-                    for (Message sm : spamMsgs) {
-                        try {
-                            String id = extractMessageId(sm);
-                            if (id != null && !id.isEmpty()) {
-                                existingSpamIdentifiers.add(id);
-                            }
-                        } catch (Exception ignored) {}
-                    }
+            Map<String, LocalDateTime> blockedMap = new HashMap<>();
+            for (BlockedContact c : blockedList) {
+                if (c.getBlockedEmail() != null) {
+                    blockedMap.put(c.getBlockedEmail().toLowerCase().trim(), c.getBlockedAt() != null ? c.getBlockedAt() : LocalDateTime.MIN);
                 }
-            } catch (Exception e) {
-                log.warn("Could not preload spam identifiers: {}", e.getMessage());
             }
+            if (blockedMap.isEmpty()) return;
 
-            Message[] messages = inbox.getMessages();
-            boolean inboxModified = false;
+            Folder inbox = null;
+            Folder spamFolder = null;
+            try {
+                inbox = store.getFolder("INBOX");
+                if (!inbox.exists() || inbox.getMessageCount() == 0) {
+                    return;
+                }
 
-            for (Message msg : messages) {
+                inbox.open(Folder.READ_WRITE);
+
+                String spamName = resolveSpamFolderName(store);
+                spamFolder = store.getFolder(spamName);
+                if (!spamFolder.exists()) {
+                    spamFolder.create(Folder.HOLDS_MESSAGES);
+                }
+                if (!spamFolder.isOpen()) {
+                    spamFolder.open(Folder.READ_WRITE);
+                }
+
+                // Preload existing message identifiers in Spam to prevent duplicates
+                Set<String> existingSpamIdentifiers = new HashSet<>();
                 try {
-                    if (msg.isSet(Flags.Flag.DELETED)) {
-                        continue;
-                    }
-                    Address[] from = msg.getFrom();
-                    if (from == null || from.length == 0) continue;
-                    String cleanFrom = extractEmailAddress(from[0].toString());
-                    if (cleanFrom == null) continue;
-                    String senderLower = cleanFrom.toLowerCase().trim();
-
-                    if (blockedMap.containsKey(senderLower)) {
-                        LocalDateTime blockedAt = blockedMap.get(senderLower);
-                        java.util.Date sentDate = msg.getSentDate();
-                        LocalDateTime msgTime = (sentDate != null) ?
-                                sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
-                                LocalDateTime.now();
-
-                        if (!msgTime.isBefore(blockedAt)) {
-                            // Message is from an unsubscribed sender
-                            String messageId = getMessageIdentifier(msg, userEmail);
-
-                            boolean alreadyProcessedInDb = processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId);
-                            boolean alreadyInSpam = (messageId != null && existingSpamIdentifiers.contains(messageId));
-
-                            if (alreadyProcessedInDb || alreadyInSpam) {
-                                log.info("Message [{}] already processed/exists in Spam for recipient {}. Skipping duplicate insert.", messageId, userEmail);
-                            } else {
-                                inbox.copyMessages(new Message[]{msg}, spamFolder);
-                                log.info("✓ Moved email [{}] from unsubscribed sender {} to Spam for recipient {}", messageId, senderLower, userEmail);
-                                if (messageId != null) {
-                                    existingSpamIdentifiers.add(messageId);
+                    int spamCount = spamFolder.getMessageCount();
+                    if (spamCount > 0) {
+                        Message[] spamMsgs = spamFolder.getMessages();
+                        FetchProfile fp = new FetchProfile();
+                        fp.add(FetchProfile.Item.ENVELOPE);
+                        fp.add("Message-ID");
+                        spamFolder.fetch(spamMsgs, fp);
+                        for (Message sm : spamMsgs) {
+                            try {
+                                String id = extractMessageId(sm);
+                                if (id != null && !id.isEmpty()) {
+                                    existingSpamIdentifiers.add(id);
                                 }
-
-                                try {
-                                    ProcessedEmail pe = ProcessedEmail.builder()
-                                            .userEmail(userEmail)
-                                            .messageIdentifier(messageId != null ? messageId : ("msg-" + System.currentTimeMillis()))
-                                            .senderEmail(senderLower)
-                                            .subject(msg.getSubject())
-                                            .folder("SPAM")
-                                            .processedAt(LocalDateTime.now())
-                                            .build();
-                                    processedEmailRepository.save(pe);
-                                } catch (Exception dbEx) {
-                                    log.warn("Processed email save note: {}", dbEx.getMessage());
-                                }
-                            }
-
-                            // Mark deleted in INBOX so it is removed from INBOX
-                            msg.setFlag(Flags.Flag.DELETED, true);
-                            inboxModified = true;
+                            } catch (Exception ignored) {}
                         }
                     }
-                } catch (Exception ex) {
-                    log.warn("Error processing inbox message for unsubscribe check: {}", ex.getMessage());
+                } catch (Exception e) {
+                    log.warn("Could not preload spam identifiers: {}", e.getMessage());
                 }
-            }
 
-            if (inboxModified) {
-                inbox.expunge();
-            }
+                Message[] messages = inbox.getMessages();
+                boolean inboxModified = false;
 
-        } catch (Exception e) {
-            log.error("Failed to process unsubscribed emails for user {}: {}", userEmail, e.getMessage(), e);
-        } finally {
-            try { if (spamFolder != null && spamFolder.isOpen()) spamFolder.close(false); } catch (Exception ignored) {}
-            try { if (inbox != null && inbox.isOpen()) inbox.close(true); } catch (Exception ignored) {}
+                for (Message msg : messages) {
+                    try {
+                        if (msg.isSet(Flags.Flag.DELETED)) {
+                            continue;
+                        }
+                        Address[] from = msg.getFrom();
+                        if (from == null || from.length == 0) continue;
+                        String cleanFrom = extractEmailAddress(from[0].toString());
+                        if (cleanFrom == null) continue;
+                        String senderLower = cleanFrom.toLowerCase().trim();
+
+                        if (blockedMap.containsKey(senderLower)) {
+                            LocalDateTime blockedAt = blockedMap.get(senderLower);
+                            java.util.Date sentDate = msg.getSentDate();
+                            LocalDateTime msgTime = (sentDate != null) ?
+                                    sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
+                                    LocalDateTime.now();
+
+                            if (!msgTime.isBefore(blockedAt)) {
+                                // Message is from an unsubscribed sender
+                                String messageId = getMessageIdentifier(msg, userEmail);
+
+                                boolean alreadyProcessedInDb = processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId);
+                                boolean alreadyInSpam = (messageId != null && existingSpamIdentifiers.contains(messageId));
+
+                                if (alreadyProcessedInDb || alreadyInSpam) {
+                                    log.info("Message [{}] already processed/exists in Spam for recipient {}. Skipping duplicate insert.", messageId, userEmail);
+                                } else {
+                                    inbox.copyMessages(new Message[]{msg}, spamFolder);
+                                    log.info("✓ Moved email [{}] from unsubscribed sender {} to Spam for recipient {}", messageId, senderLower, userEmail);
+                                    if (messageId != null) {
+                                        existingSpamIdentifiers.add(messageId);
+                                    }
+
+                                    try {
+                                        ProcessedEmail pe = ProcessedEmail.builder()
+                                                .userEmail(userEmail)
+                                                .messageIdentifier(messageId != null ? messageId : ("msg-" + System.currentTimeMillis()))
+                                                .senderEmail(senderLower)
+                                                .subject(msg.getSubject())
+                                                .folder("SPAM")
+                                                .processedAt(LocalDateTime.now())
+                                                .build();
+                                        processedEmailRepository.save(pe);
+                                    } catch (Exception dbEx) {
+                                        log.warn("Processed email save note: {}", dbEx.getMessage());
+                                    }
+                                }
+
+                                // Mark deleted in INBOX so it is removed from INBOX
+                                msg.setFlag(Flags.Flag.DELETED, true);
+                                inboxModified = true;
+                            }
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Error processing inbox message for unsubscribe check: {}", ex.getMessage());
+                    }
+                }
+
+                if (inboxModified) {
+                    inbox.expunge();
+                }
+
+            } catch (Exception e) {
+                log.error("Failed to process unsubscribed emails for user {}: {}", userEmail, e.getMessage(), e);
+            } finally {
+                try { if (spamFolder != null && spamFolder.isOpen()) spamFolder.close(false); } catch (Exception ignored) {}
+                try { if (inbox != null && inbox.isOpen()) inbox.close(false); } catch (Exception ignored) {}
+            }
         }
     }
 
