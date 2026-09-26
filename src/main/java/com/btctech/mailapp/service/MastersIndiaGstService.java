@@ -20,16 +20,16 @@ import java.time.Instant;
 @Service
 public class MastersIndiaGstService {
 
-    @Value("${mastersindia.client-id}")
+    @Value("${mastersindia.client-id:}")
     private String clientId;
 
-    @Value("${mastersindia.client-secret}")
+    @Value("${mastersindia.client-secret:}")
     private String clientSecret;
 
-    @Value("${mastersindia.username}")
+    @Value("${mastersindia.username:}")
     private String username;
 
-    @Value("${mastersindia.password}")
+    @Value("${mastersindia.password:}")
     private String password;
 
     @Value("${mastersindia.api-base-url:https://commonapi.mastersindia.co}")

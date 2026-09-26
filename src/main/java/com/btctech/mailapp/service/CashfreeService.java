@@ -16,10 +16,10 @@ import java.util.Collections;
 @Service
 public class CashfreeService {
 
-    @Value("${cashfree.client-id}")
+    @Value("${cashfree.client-id:}")
     private String clientId;
 
-    @Value("${cashfree.client-secret}")
+    @Value("${cashfree.client-secret:}")
     private String clientSecret;
 
     @Value("${cashfree.api-base-url:https://sandbox.cashfree.com/verification}")

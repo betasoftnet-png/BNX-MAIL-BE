@@ -26,16 +26,16 @@ public class MailSendService {
     
     private final MailReceiveService mailReceiveService;
 
-    @Value("${mail.smtp.host}")
+    @Value("${mail.smtp.host:localhost}")
     private String smtpHost;
 
-    @Value("${mail.smtp.port}")
+    @Value("${mail.smtp.port:25}")
     private int smtpPort;
 
-    @Value("${mail.imap.host}")
+    @Value("${mail.imap.host:localhost}")
     private String imapHost;
 
-    @Value("${mail.imap.port}")
+    @Value("${mail.imap.port:143}")
     private int imapPort;
 
     /**
@@ -95,11 +95,17 @@ public class MailSendService {
                 for (AttachmentInfo attachment : request.getAttachments()) {
                     MimeBodyPart attachPart = new MimeBodyPart();
                     try {
-                        attachPart.attachFile(new File(attachment.getFilePath()));
+                        File f = new File(attachment.getFilePath());
+                        if (f.exists()) {
+                            attachPart.attachFile(f);
+                        } else {
+                            log.warn("Attachment file not found on disk at: {}", attachment.getFilePath());
+                        }
                         attachPart.setFileName(attachment.getFileName());
+                        attachPart.setDisposition(Part.ATTACHMENT);
                         multipart.addBodyPart(attachPart);
                     } catch (IOException ex) {
-                        log.error("Failed to attach file: {}", attachment.getFileName());
+                        log.error("Failed to attach file: {}", attachment.getFileName(), ex);
                     }
                 }
 

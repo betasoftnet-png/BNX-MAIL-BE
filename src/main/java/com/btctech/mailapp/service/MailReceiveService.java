@@ -48,10 +48,10 @@ import java.util.Properties;
 @RequiredArgsConstructor
 public class MailReceiveService {
 
-    @Value("${mail.imap.host}")
+    @Value("${mail.imap.host:localhost}")
     private String imapHost;
 
-    @Value("${mail.imap.port}")
+    @Value("${mail.imap.port:143}")
     private int imapPort;
 
     @Value("${mail.imap.protocol:imap}")
@@ -2039,9 +2039,13 @@ public class MailReceiveService {
                 if (hasAttachments(mp.getBodyPart(i))) return true;
             }
         } else {
+            String name = part.getFileName();
+            if (name != null && !name.trim().isEmpty()) {
+                return true;
+            }
             String disp = part.getDisposition();
-            if (Part.ATTACHMENT.equalsIgnoreCase(disp) || Part.INLINE.equalsIgnoreCase(disp)) {
-                if (part.getFileName() != null) return true;
+            if (disp != null && (disp.toLowerCase().contains(Part.ATTACHMENT.toLowerCase()) || disp.toLowerCase().contains(Part.INLINE.toLowerCase()))) {
+                if (name != null && !name.trim().isEmpty()) return true;
             } else if (part.isMimeType("message/rfc822") || part.isMimeType("message/delivery-status") || part.isMimeType("text/rfc822-headers")) {
                 return true;
             }
@@ -2057,12 +2061,24 @@ public class MailReceiveService {
         } else {
             String disp = part.getDisposition();
             String name = part.getFileName();
-            if (Part.ATTACHMENT.equalsIgnoreCase(disp) || Part.INLINE.equalsIgnoreCase(disp)) {
-                if (name != null) names.add(jakarta.mail.internet.MimeUtility.decodeText(name));
+            if (name != null && !name.trim().isEmpty()) {
+                String cleanName = jakarta.mail.internet.MimeUtility.decodeText(name).trim().replaceAll("^\"|\"$", "");
+                if (!cleanName.isEmpty() && !names.contains(cleanName)) {
+                    names.add(cleanName);
+                }
+            } else if (disp != null && (disp.toLowerCase().contains(Part.ATTACHMENT.toLowerCase()) || disp.toLowerCase().contains(Part.INLINE.toLowerCase()))) {
+                if (name != null && !name.trim().isEmpty()) {
+                    String cleanName = jakarta.mail.internet.MimeUtility.decodeText(name).trim().replaceAll("^\"|\"$", "");
+                    if (!cleanName.isEmpty() && !names.contains(cleanName)) {
+                        names.add(cleanName);
+                    }
+                }
             } else if (part.isMimeType("message/rfc822")) {
-                names.add(name != null ? jakarta.mail.internet.MimeUtility.decodeText(name) : "original_message.eml");
+                String fallback = name != null ? jakarta.mail.internet.MimeUtility.decodeText(name).trim().replaceAll("^\"|\"$", "") : "original_message.eml";
+                if (!names.contains(fallback)) names.add(fallback);
             } else if (part.isMimeType("message/delivery-status") || part.isMimeType("text/rfc822-headers")) {
-                names.add(name != null ? jakarta.mail.internet.MimeUtility.decodeText(name) : "delivery_status.txt");
+                String fallback = name != null ? jakarta.mail.internet.MimeUtility.decodeText(name).trim().replaceAll("^\"|\"$", "") : "delivery_status.txt";
+                if (!names.contains(fallback)) names.add(fallback);
             }
         }
         return names;
@@ -2121,7 +2137,41 @@ public class MailReceiveService {
             }
             UIDFolder uidFolder = (UIDFolder) folder;
 
-            Message message = uidFolder.getMessageByUID(Long.parseLong(uid));
+            Message message = null;
+            try {
+                message = uidFolder.getMessageByUID(Long.parseLong(uid));
+            } catch (Exception ex) {
+                log.debug("UID lookup failed in {}: {}", actualFolderName, ex.getMessage());
+            }
+
+            // Fallback: If not found in requested folder, check alternative folder (e.g. Sent or INBOX)
+            if (message == null) {
+                try {
+                    String altFolder = "Sent".equalsIgnoreCase(actualFolderName) || actualFolderName.toUpperCase().contains("SENT")
+                            ? "INBOX"
+                            : resolveSentFolderName(store);
+                    if (altFolder != null && !altFolder.equalsIgnoreCase(actualFolderName)) {
+                        Folder fallbackFolder = store.getFolder(altFolder);
+                        if (fallbackFolder != null && fallbackFolder.exists()) {
+                            fallbackFolder.open(Folder.READ_ONLY);
+                            if (fallbackFolder instanceof UIDFolder) {
+                                message = ((UIDFolder) fallbackFolder).getMessageByUID(Long.parseLong(uid));
+                                if (message != null) {
+                                    folder.close(false);
+                                    folder = fallbackFolder;
+                                } else {
+                                    fallbackFolder.close(false);
+                                }
+                            } else {
+                                fallbackFolder.close(false);
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    log.debug("Fallback folder search failed: {}", ex.getMessage());
+                }
+            }
+
             if (message == null) throw new MailException("Email with UID " + uid + " not found");
 
             if (message.getContent() instanceof Multipart) findAndWriteAttachment((Multipart) message.getContent(), fileName, os);
@@ -2135,6 +2185,7 @@ public class MailReceiveService {
     }
 
     private boolean findAndWriteAttachment(Multipart mp, String name, java.io.OutputStream os) throws MessagingException, IOException {
+        String targetName = name != null ? name.trim().replaceAll("^\"|\"$", "") : "";
         for (int i = 0; i < mp.getCount(); i++) {
             BodyPart bp = mp.getBodyPart(i);
             String fn = bp.getFileName();
@@ -2145,9 +2196,14 @@ public class MailReceiveService {
                 else if (bp.isMimeType("message/delivery-status") || bp.isMimeType("text/rfc822-headers")) decodedFn = "delivery_status.txt";
             }
             
-            if (decodedFn != null && decodedFn.equalsIgnoreCase(name)) {
-                bp.getDataHandler().getInputStream().transferTo(os);
-                return true;
+            if (decodedFn != null) {
+                String cleanDecodedFn = decodedFn.trim().replaceAll("^\"|\"$", "");
+                String baseDecoded = new java.io.File(cleanDecodedFn).getName();
+                String baseTarget = new java.io.File(targetName).getName();
+                if (cleanDecodedFn.equalsIgnoreCase(targetName) || baseDecoded.equalsIgnoreCase(baseTarget)) {
+                    bp.getDataHandler().getInputStream().transferTo(os);
+                    return true;
+                }
             }
             if (bp.isMimeType("multipart/*")) {
                 if (findAndWriteAttachment((Multipart) bp.getContent(), name, os)) return true;

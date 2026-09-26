@@ -31,10 +31,10 @@ public class MailboxService {
     private final SessionService sessionService;
     private final JavaMailSender javaMailSender;
     
-    @Value("${mail.domain}")
+    @Value("${mail.domain:btctech.shop}")
     private String mailDomain;
     
-    @Value("${mail.storage.base-path}")
+    @Value("${mail.storage.base-path:uploads/mail}")
     private String basePath;
     
     @Transactional

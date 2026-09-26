@@ -21,7 +21,7 @@ public class SessionService {
     
     private final UserSessionRepository sessionRepository;
     
-    @Value("${encryption.key}")
+    @Value("${encryption.key:1234567890123456}")
     private String encryptionKey;
     
     /**
