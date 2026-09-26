@@ -19,6 +19,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Properties;
 
+import java.util.UUID;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -38,9 +40,7 @@ public class MailSendService {
     @Value("${mail.imap.port:143}")
     private int imapPort;
 
-    /**
-     * Send email - Password retrieved from session automatically
-     */
+
     public void sendMail(String fromEmail, String password, SendMailRequest request) {
         
         log.info("Attempting to send email from {} to {}", fromEmail, request.getTo());
@@ -48,8 +48,9 @@ public class MailSendService {
         try {
             Properties props = new Properties();
             props.put("mail.smtp.host", smtpHost);
+            props.put("mail.smtp.localhost", "mail.bnxmail.com");
             props.put("mail.smtp.port", String.valueOf(smtpPort));
-            props.put("mail.smtp.auth", "false"); // Local Postfix on 127.0.0.1
+            props.put("mail.smtp.auth", "false"); 
             props.put("mail.smtp.starttls.enable", "false"); 
             props.put("mail.smtp.ssl.trust", "*");
             props.put("mail.smtp.timeout", "10000"); 
@@ -59,6 +60,10 @@ public class MailSendService {
             
             Session session = Session.getInstance(props);
             MimeMessage message = new MimeMessage(session);
+            // message.setHeader(
+            //     "Message-ID",
+            //     "<" + java.util.UUID.randomUUID() + "@mail.bnxmail.com>"
+            // );
             
             InternetAddress fromAddress;
             if (request.getFromName() != null && !request.getFromName().isEmpty()) {
@@ -81,8 +86,6 @@ public class MailSendService {
             
             if (request.getAttachments() != null && !request.getAttachments().isEmpty()) {
                 Multipart multipart = new MimeMultipart();
-
-                // 1. Add Text/HTML Body Part
                 MimeBodyPart messageBodyPart = new MimeBodyPart();
                 if (request.getIsHtml() != null && request.getIsHtml()) {
                     messageBodyPart.setContent(request.getBody(), "text/html; charset=utf-8");
@@ -91,7 +94,7 @@ public class MailSendService {
                 }
                 multipart.addBodyPart(messageBodyPart);
 
-                // 2. Add Attachments
+  
                 for (AttachmentInfo attachment : request.getAttachments()) {
                     MimeBodyPart attachPart = new MimeBodyPart();
                     try {
@@ -111,8 +114,24 @@ public class MailSendService {
 
                 message.setContent(multipart);
             } else {
+                // if (request.getIsHtml() != null && request.getIsHtml()) {
+                //     message.setContent(request.getBody(), "text/html; charset=utf-8");
+                // } else {
+                //     message.setText(request.getBody(), "utf-8");
+                // }
                 if (request.getIsHtml() != null && request.getIsHtml()) {
-                    message.setContent(request.getBody(), "text/html; charset=utf-8");
+                    MimeMultipart alternative = new MimeMultipart("alternative");
+
+                    MimeBodyPart textPart = new MimeBodyPart();
+                    textPart.setText(request.getBody(), "utf-8");
+
+                    MimeBodyPart htmlPart = new MimeBodyPart();
+                    htmlPart.setContent(request.getBody(), "text/html; charset=utf-8");
+
+                    alternative.addBodyPart(textPart);
+                    alternative.addBodyPart(htmlPart);
+
+                    message.setContent(alternative);
                 } else {
                     message.setText(request.getBody(), "utf-8");
                 }
@@ -121,11 +140,20 @@ public class MailSendService {
             message.setSentDate(new java.util.Date());
             
             log.info("Sending email to SMTP server...");
-            Transport.send(message);
+            message.saveChanges();
+            String messageId = "<" + UUID.randomUUID() + "@mail.bnxmail.com>";
+            message.setHeader("Message-ID", messageId);
+
+            log.info("Message-ID generated: {}", message.getHeader("Message-ID", null));
+            // Transport.send(message);
+            Transport transport = session.getTransport("smtp");
+            transport.connect();
+            transport.sendMessage(message, message.getAllRecipients());
+            transport.close();
             
             log.info("✓ Email sent successfully from {} to {}", fromEmail, request.getTo());
             
-            // Archival process (IMAP "Sent" folder)
+          
             if (password != null && !password.isEmpty()) {
                 saveCopyToSent(fromEmail, password, message);
             } else {
@@ -141,9 +169,7 @@ public class MailSendService {
         }
     }
 
-    /**
-     * Send bulk emails asynchronously to a list of recipients.
-     */
+
     @Async
     public void sendBulkMail(String fromEmail, String password, BulkMailRequest request) {
         log.info("Starting asynchronous bulk email send from {} to {} recipients", fromEmail, request.getRecipients().size());
@@ -156,6 +182,7 @@ public class MailSendService {
         try {
             Properties props = new Properties();
             props.put("mail.smtp.host", smtpHost);
+            props.put("mail.smtp.localhost", "mail.bnxmail.com");
             props.put("mail.smtp.port", String.valueOf(smtpPort));
             props.put("mail.smtp.auth", "false");
             props.put("mail.smtp.starttls.enable", "false");
@@ -166,6 +193,10 @@ public class MailSendService {
             for (String recipient : request.getRecipients()) {
                 try {
                     MimeMessage message = new MimeMessage(session);
+                    // message.setHeader(
+                    //     "Message-ID",
+                    //     "<" + java.util.UUID.randomUUID() + "@mail.bnxmail.com>"
+                    // );
                     message.setFrom(new InternetAddress(fromEmail));
                     message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipient));
                     message.setSubject(request.getSubject());
@@ -176,10 +207,24 @@ public class MailSendService {
                         message.setText(request.getBody(), "utf-8");
                     }
 
-                    Transport.send(message);
+                message.saveChanges();
+                String messageId =
+                    "<" + UUID.randomUUID() + "@mail.bnxmail.com>";
+
+                    message.setHeader("Message-ID", messageId);
+
+                    log.info(
+                        "Message-ID generated: {}",
+                        message.getHeader("Message-ID", null)
+                    );
+                    // Transport.send(message);
+                    Transport transport = session.getTransport("smtp");
+                    transport.connect();
+                    transport.sendMessage(message, message.getAllRecipients());
+                    transport.close();
                     log.info("✓ Bulk item sent to {}", recipient);
 
-                    // Anti-spam delay: 500ms between emails
+                
                     Thread.sleep(500);
                 } catch (Exception e) {
                     log.error("Failed to send bulk email to {}: {}", recipient, e.getMessage());
