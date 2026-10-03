@@ -85,43 +85,42 @@ public class ConnectionService {
                 existingContactUserIds.add(otherId);
             }
 
-            // 2. Auto-sync existing Casbox chat contacts if any don't have a Connection row yet
+            // 2. Include contacts explicitly accepted in UserSettings.casboxAccepted if any don't have a Connection row yet
             try {
-                List<com.btctech.mailapp.entity.CasboxMessage> userMessages = casboxMessageRepository.findAllMessagesForUser(user.getEmail());
-                for (com.btctech.mailapp.entity.CasboxMessage msg : userMessages) {
-                    String otherEmail = user.getEmail() != null && user.getEmail().equalsIgnoreCase(msg.getSenderEmail())
-                            ? msg.getReceiverEmail() : msg.getSenderEmail();
-                    if (otherEmail != null && !otherEmail.equalsIgnoreCase(user.getEmail())) {
-                        User contactUser = resolveUser(otherEmail);
-                        if (contactUser != null && !contactUser.getId().equals(user.getId()) && !existingContactUserIds.contains(contactUser.getId())) {
-                            // Check if connection already exists between them
-                            Optional<Connection> existingOpt = Optional.empty();
-                            try {
-                                existingOpt = connectionRepository.findConnectionBetweenUsers(user.getId(), contactUser.getId());
-                            } catch (Exception ignored) {}
-
-                            if (existingOpt.isEmpty()) {
-                                Connection newConn = Connection.builder()
-                                        .requesterId(user.getId())
-                                        .receiverId(contactUser.getId())
-                                        .status("CONNECTED")
-                                        .createdAt(LocalDateTime.now())
-                                        .updatedAt(LocalDateTime.now())
-                                        .build();
+                if (userService != null) {
+                    com.btctech.mailapp.entity.UserSettings userSettings = userService.getSettings(user);
+                    if (userSettings != null && userSettings.getCasboxAccepted() != null) {
+                        for (String acceptedContact : userSettings.getCasboxAccepted()) {
+                            if (acceptedContact == null || acceptedContact.trim().isEmpty()) continue;
+                            User contactUser = resolveUser(acceptedContact);
+                            if (contactUser != null && !contactUser.getId().equals(user.getId()) && !existingContactUserIds.contains(contactUser.getId())) {
+                                Optional<Connection> existingOpt = Optional.empty();
                                 try {
-                                    Connection saved = connectionRepository.save(newConn);
-                                    connections.add(saved);
-                                    existingContactUserIds.add(contactUser.getId());
-                                    log.info("Auto-provisioned CONNECTED connection between user {} and {}", user.getId(), contactUser.getId());
-                                } catch (Exception e) {
-                                    log.warn("Could not save auto-provisioned connection: {}", e.getMessage());
+                                    existingOpt = connectionRepository.findConnectionBetweenUsers(user.getId(), contactUser.getId());
+                                } catch (Exception ignored) {}
+
+                                if (existingOpt.isEmpty()) {
+                                    Connection newConn = Connection.builder()
+                                            .requesterId(user.getId())
+                                            .receiverId(contactUser.getId())
+                                            .status("CONNECTED")
+                                            .createdAt(LocalDateTime.now())
+                                            .updatedAt(LocalDateTime.now())
+                                            .build();
+                                    try {
+                                        Connection saved = connectionRepository.save(newConn);
+                                        connections.add(saved);
+                                        existingContactUserIds.add(contactUser.getId());
+                                    } catch (Exception e) {
+                                        log.warn("Could not save auto-provisioned connection: {}", e.getMessage());
+                                    }
                                 }
                             }
                         }
                     }
                 }
             } catch (Exception e) {
-                log.warn("Error auto-syncing existing chat contacts to connections: {}", e.getMessage());
+                log.warn("Error syncing accepted contacts to connections: {}", e.getMessage());
             }
 
             // 3. Map to DTOs
@@ -297,6 +296,23 @@ public class ConnectionService {
             log.warn("Could not check isConnectionActive: {}", e.getMessage());
         }
         return true;
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isConnectionAccepted(Long user1Id, Long user2Id) {
+        if (user1Id == null || user2Id == null) {
+            return false;
+        }
+        try {
+            Optional<Connection> connOpt = connectionRepository.findConnectionBetweenUsers(user1Id, user2Id);
+            if (connOpt.isPresent()) {
+                String status = connOpt.get().getStatus();
+                return status != null && ("CONNECTED".equalsIgnoreCase(status) || "ACCEPTED".equalsIgnoreCase(status));
+            }
+        } catch (Exception e) {
+            log.warn("Could not check isConnectionAccepted: {}", e.getMessage());
+        }
+        return false;
     }
 
     @Transactional(readOnly = true)

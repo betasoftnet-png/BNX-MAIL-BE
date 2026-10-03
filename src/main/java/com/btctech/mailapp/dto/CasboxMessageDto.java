@@ -43,4 +43,17 @@ public class CasboxMessageDto {
     public void setArchived(Boolean archived) {
         this.isArchived = archived;
     }
+
+    @JsonProperty("isAccepted")
+    private Boolean isAccepted = false;
+
+    @JsonProperty("accepted")
+    public Boolean getAccepted() {
+        return isAccepted;
+    }
+
+    @JsonProperty("accepted")
+    public void setAccepted(Boolean accepted) {
+        this.isAccepted = accepted;
+    }
 }

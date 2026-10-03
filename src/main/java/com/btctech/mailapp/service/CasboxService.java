@@ -9,10 +9,16 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.btctech.mailapp.entity.User;
+import com.btctech.mailapp.entity.UserSettings;
+import com.btctech.mailapp.repository.UserRepository;
+
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -22,28 +28,41 @@ public class CasboxService {
     private final SimpMessagingTemplate messagingTemplate;
     private final ContactAliasService contactAliasService;
     private final ConnectionService connectionService;
+    private final UserService userService;
+    private final UserRepository userRepository;
 
     @Autowired
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate,
                          ContactAliasService contactAliasService,
-                         @org.springframework.context.annotation.Lazy ConnectionService connectionService) {
+                         @org.springframework.context.annotation.Lazy ConnectionService connectionService,
+                         @org.springframework.context.annotation.Lazy UserService userService,
+                         UserRepository userRepository) {
         this.casboxMessageRepository = casboxMessageRepository;
         this.messagingTemplate = messagingTemplate;
         this.contactAliasService = contactAliasService;
         this.connectionService = connectionService;
+        this.userService = userService;
+        this.userRepository = userRepository;
+    }
+
+    public CasboxService(CasboxMessageRepository casboxMessageRepository,
+                         SimpMessagingTemplate messagingTemplate,
+                         ContactAliasService contactAliasService,
+                         ConnectionService connectionService) {
+        this(casboxMessageRepository, messagingTemplate, contactAliasService, connectionService, null, null);
     }
 
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate,
                          ContactAliasService contactAliasService) {
-        this(casboxMessageRepository, messagingTemplate, contactAliasService, null);
+        this(casboxMessageRepository, messagingTemplate, contactAliasService, null, null, null);
     }
 
     // Backwards-compatible constructor for testing and mock setups
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate) {
-        this(casboxMessageRepository, messagingTemplate, null, null);
+        this(casboxMessageRepository, messagingTemplate, null, null, null, null);
     }
 
     @Transactional
@@ -292,6 +311,25 @@ public class CasboxService {
         dto.setSenderDisplayName(senderAlias != null ? senderAlias : senderUsername);
         dto.setReceiverDisplayName(receiverAlias != null ? receiverAlias : receiverUsername);
 
+        // Determine if message / contact is accepted for currentUserEmail
+        boolean accepted = false;
+        if (currentUserEmail != null && !currentUserEmail.trim().isEmpty()) {
+            String normCurrent = currentUserEmail.trim().toLowerCase();
+            String normSender = entity.getSenderEmail() != null ? entity.getSenderEmail().trim().toLowerCase() : "";
+            String currentLocal = normCurrent.contains("@") ? normCurrent.substring(0, normCurrent.indexOf("@")) : normCurrent;
+            String senderLocal = normSender.contains("@") ? normSender.substring(0, normSender.indexOf("@")) : normSender;
+
+            boolean isCurrentUserSender = normCurrent.equals(normSender) || currentLocal.equals(senderLocal);
+            if (isCurrentUserSender) {
+                // Outgoing messages sent by current user are always in Messages
+                accepted = true;
+            } else {
+                // Incoming message: evaluate sender's current accepted status relative to current user
+                accepted = isContactAccepted(normCurrent, normSender);
+            }
+        }
+        dto.setIsAccepted(accepted);
+
         return dto;
     }
 
@@ -301,6 +339,99 @@ public class CasboxService {
             return email.substring(0, email.indexOf("@"));
         }
         return email;
+    }
+
+    public boolean isContactAccepted(String currentUserEmail, String contactEmail) {
+        if (currentUserEmail == null || contactEmail == null) {
+            return false;
+        }
+
+        String normUser = currentUserEmail.trim().toLowerCase();
+        String normContact = contactEmail.trim().toLowerCase();
+
+        if (normContact.isEmpty() || normUser.isEmpty()) {
+            return false;
+        }
+
+        if (normUser.equals(normContact)) {
+            return true;
+        }
+
+        String contactLocal = normContact.contains("@") ? normContact.substring(0, normContact.indexOf("@")) : normContact;
+        String userLocal = normUser.contains("@") ? normUser.substring(0, normUser.indexOf("@")) : normUser;
+
+        if (contactLocal.equalsIgnoreCase(userLocal)) {
+            return true;
+        }
+
+        // 1. Check UserSettings.casboxAccepted for currentUser
+        if (userService != null) {
+            try {
+                User user = resolveUser(normUser);
+                if (user != null) {
+                    UserSettings settings = userService.getSettings(user);
+                    if (settings != null && settings.getCasboxAccepted() != null) {
+                        for (String accepted : settings.getCasboxAccepted()) {
+                            if (accepted == null) continue;
+                            String normAccepted = accepted.trim().toLowerCase();
+                            String acceptedLocal = normAccepted.contains("@") ? normAccepted.substring(0, normAccepted.indexOf("@")) : normAccepted;
+                            if (normAccepted.equals(normContact) || acceptedLocal.equals(contactLocal) || normAccepted.equals(contactLocal)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 2. Check ConnectionService active connections
+        if (connectionService != null) {
+            try {
+                User user = resolveUser(normUser);
+                User contact = resolveUser(normContact);
+                if (user != null && contact != null) {
+                    Set<String> disconnected = connectionService.getDisconnectedContactIdentifiers(user.getId());
+                    if (disconnected.contains(String.valueOf(contact.getId()))
+                            || (contact.getUsername() != null && disconnected.contains(contact.getUsername().toLowerCase()))
+                            || (contact.getEmail() != null && disconnected.contains(contact.getEmail().toLowerCase()))) {
+                        return false;
+                    }
+
+                    if (connectionService.isConnectionActive(user.getId(), contact.getId())) {
+                        if (connectionService.isConnectionAccepted(user.getId(), contact.getId())) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        return false;
+    }
+
+    private User resolveUser(String identifier) {
+        if (identifier == null || identifier.trim().isEmpty()) return null;
+        if (connectionService != null) {
+            try {
+                User u = connectionService.resolveUser(identifier);
+                if (u != null) return u;
+            } catch (Exception ignored) {}
+        }
+        if (userRepository != null) {
+            try {
+                String clean = identifier.trim().toLowerCase();
+                Optional<User> byEmail = userRepository.findByEmail(clean);
+                if (byEmail.isPresent()) return byEmail.get();
+                Optional<User> byUser = userRepository.findByUsername(clean);
+                if (byUser.isPresent()) return byUser.get();
+                if (clean.contains("@")) {
+                    String local = clean.substring(0, clean.indexOf("@"));
+                    Optional<User> byLocal = userRepository.findByUsername(local);
+                    if (byLocal.isPresent()) return byLocal.get();
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
     }
 
     @Transactional
