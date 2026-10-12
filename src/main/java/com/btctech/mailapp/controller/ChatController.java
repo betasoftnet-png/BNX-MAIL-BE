@@ -275,4 +275,24 @@ public class ChatController {
         Chat updated = chatService.renameChat(id, newName.trim(), authentication.getName());
         return ResponseEntity.ok(convertToDTO(updated));
     }
+
+    @DeleteMapping("/{chatId}/members/{email:.+}")
+    public ResponseEntity<?> removeMember(
+            @PathVariable Long chatId,
+            @PathVariable String email,
+            org.springframework.security.core.Authentication authentication) {
+        String requesterEmail = authentication.getName();
+        Chat updated = chatService.removeMemberFromGroup(chatId, email, requesterEmail);
+        return ResponseEntity.ok(convertToDTO(updated));
+    }
+
+    @DeleteMapping("/{chatId}/members")
+    public ResponseEntity<?> removeMemberQuery(
+            @PathVariable Long chatId,
+            @RequestParam String email,
+            org.springframework.security.core.Authentication authentication) {
+        String requesterEmail = authentication.getName();
+        Chat updated = chatService.removeMemberFromGroup(chatId, email, requesterEmail);
+        return ResponseEntity.ok(convertToDTO(updated));
+    }
 }

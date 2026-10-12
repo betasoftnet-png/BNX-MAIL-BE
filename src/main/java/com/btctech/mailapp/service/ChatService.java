@@ -324,4 +324,36 @@ public class ChatService {
         chat.setName(newName);
         return chatRepository.save(chat);
     }
+
+    @Transactional
+    public Chat removeMemberFromGroup(Long chatId, String targetEmail, String requesterEmail) {
+        Chat chat = chatRepository.findById(chatId)
+                .orElseThrow(() -> new RuntimeException("Chat not found"));
+        if (chat.getType() != ChatType.GROUP) {
+            throw new RuntimeException("Cannot remove members from a non-group chat");
+        }
+
+        if (!isChatAdmin(chat, requesterEmail)) {
+            throw new RuntimeException("Unauthorized: Only group Admins can remove members");
+        }
+
+        User targetUser = userRepository.findByEmail(targetEmail)
+                .orElseGet(() -> userRepository.findByUsername(targetEmail)
+                .orElseThrow(() -> new RuntimeException("User not found: " + targetEmail)));
+
+        if (!chat.getMembers().contains(targetUser)) {
+            throw new RuntimeException("User is not a member of this Colab group");
+        }
+
+        if (chat.getCreator() != null && chat.getCreator().getId().equals(targetUser.getId())) {
+            throw new RuntimeException("Cannot remove the group creator");
+        }
+
+        chat.getMembers().removeIf(u -> u.getId() != null && u.getId().equals(targetUser.getId()));
+        if (chat.getAdmins() != null) {
+            chat.getAdmins().removeIf(u -> u.getId() != null && u.getId().equals(targetUser.getId()));
+        }
+
+        return chatRepository.save(chat);
+    }
 }
