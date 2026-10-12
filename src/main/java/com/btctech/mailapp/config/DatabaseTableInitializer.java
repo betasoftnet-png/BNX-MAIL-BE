@@ -67,7 +67,26 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """);
 
-            log.info("Database tables contact_aliases, connections, and processed_emails are verified and ready.");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS chat_admins (
+                    chat_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    PRIMARY KEY (chat_id, user_id),
+                    INDEX idx_chat_admins_chat (chat_id),
+                    INDEX idx_chat_admins_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            try {
+                jdbcTemplate.execute("""
+                    INSERT IGNORE INTO chat_admins (chat_id, user_id)
+                    SELECT id, creator_id FROM chats WHERE creator_id IS NOT NULL
+                """);
+            } catch (Exception ignoreEx) {
+                // Ignore if chats table or creator_id is not yet initialized
+            }
+
+            log.info("Database tables contact_aliases, connections, processed_emails, and chat_admins are verified and ready.");
         } catch (Exception e) {
             log.error("Could not automatically create/verify tables: {}", e.getMessage());
         }

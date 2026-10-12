@@ -14,6 +14,13 @@ public class ChatDTO {
     private String lastMessageTime;
     private Integer unreadCount;
     private String creatorEmail;
+    private List<String> adminEmails;
+
+    @Data
+    public static class UpdateMemberRoleRequest {
+        private String email;
+        private String role;
+    }
 
     @Data
     public static class CreateDirect {

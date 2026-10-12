@@ -16,10 +16,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -60,6 +62,7 @@ public class ChatService {
         if (creator != null) {
             members.add(creator);
             chat.setCreator(creator);
+            chat.getAdmins().add(creator);
         }
         chat.setMembers(members);
         Chat savedChat = chatRepository.save(chat);
@@ -107,12 +110,35 @@ public class ChatService {
         return chatMessageRepository.save(message);
     }
 
+    public boolean isChatAdmin(Chat chat, String userEmail) {
+        if (chat == null || userEmail == null) return false;
+        String trimmed = userEmail.trim().toLowerCase();
+        if (chat.getCreator() != null) {
+            String cEmail = chat.getCreator().getEmail() != null ? chat.getCreator().getEmail() : chat.getCreator().getUsername();
+            if (cEmail != null && cEmail.trim().equalsIgnoreCase(trimmed)) {
+                return true;
+            }
+        }
+        if (chat.getAdmins() != null) {
+            for (User u : chat.getAdmins()) {
+                String aEmail = u.getEmail() != null ? u.getEmail() : u.getUsername();
+                if (aEmail != null && aEmail.trim().equalsIgnoreCase(trimmed)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     @Transactional
     public Chat inviteMembersToGroup(Long chatId, List<String> emails, String inviterEmail) {
         Chat chat = chatRepository.findById(chatId)
                 .orElseThrow(() -> new RuntimeException("Chat not found"));
         if (chat.getType() != ChatType.GROUP) {
             throw new RuntimeException("Cannot add members to a non-group chat");
+        }
+        if (!isChatAdmin(chat, inviterEmail)) {
+            throw new RuntimeException("Unauthorized: Only group Admins can add new members");
         }
         User inviter = userRepository.findByEmail(inviterEmail).orElseGet(() -> userRepository.findByUsername(inviterEmail).orElse(null));
 
@@ -239,6 +265,52 @@ public class ChatService {
 
     public List<GroupBroadcast> getBroadcasts(Long chatId) {
         return groupBroadcastRepository.findByChatIdOrderBySentDateDesc(chatId);
+    }
+
+    public List<GroupBroadcast> getBroadcasts(Long chatId, String userEmail) {
+        Chat chat = chatRepository.findById(chatId)
+                .orElseThrow(() -> new RuntimeException("Chat not found"));
+        List<GroupBroadcast> all = groupBroadcastRepository.findByChatIdOrderBySentDateDesc(chatId);
+        if (isChatAdmin(chat, userEmail)) {
+            return all;
+        }
+        // Regular members only see their own TDocs / broadcasts
+        if (userEmail == null) return Collections.emptyList();
+        String trimmed = userEmail.trim().toLowerCase();
+        return all.stream()
+                .filter(b -> b.getSenderEmail() != null && b.getSenderEmail().trim().equalsIgnoreCase(trimmed))
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public Chat updateMemberRole(Long chatId, String targetEmail, String newRole, String requesterEmail) {
+        Chat chat = chatRepository.findById(chatId)
+                .orElseThrow(() -> new RuntimeException("Chat not found"));
+        if (chat.getType() != ChatType.GROUP) {
+            throw new RuntimeException("Cannot manage roles in a non-group chat");
+        }
+
+        if (!isChatAdmin(chat, requesterEmail)) {
+            throw new RuntimeException("Unauthorized: Only group Admins can manage roles");
+        }
+
+        User targetUser = userRepository.findByEmail(targetEmail)
+                .orElseGet(() -> userRepository.findByUsername(targetEmail)
+                .orElseThrow(() -> new RuntimeException("User not found: " + targetEmail)));
+
+        if (!chat.getMembers().contains(targetUser)) {
+            throw new RuntimeException("User is not a member of this Colab group");
+        }
+
+        if ("ADMIN".equalsIgnoreCase(newRole)) {
+            chat.getAdmins().add(targetUser);
+        } else if ("MEMBER".equalsIgnoreCase(newRole)) {
+            chat.getAdmins().remove(targetUser);
+        } else {
+            throw new RuntimeException("Invalid role specified: " + newRole);
+        }
+
+        return chatRepository.save(chat);
     }
 
     @Transactional

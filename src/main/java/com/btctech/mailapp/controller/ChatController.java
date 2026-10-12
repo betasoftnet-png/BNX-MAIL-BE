@@ -12,9 +12,11 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.List;
-import java.util.stream.Collectors;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/chat")
@@ -83,6 +85,19 @@ public class ChatController {
         if (chat.getCreator() != null) {
             dto.setCreatorEmail(chat.getCreator().getEmail() != null ? chat.getCreator().getEmail() : chat.getCreator().getUsername());
         }
+
+        Set<String> adminEmails = new HashSet<>();
+        if (chat.getCreator() != null) {
+            String cEmail = chat.getCreator().getEmail() != null ? chat.getCreator().getEmail() : chat.getCreator().getUsername();
+            if (cEmail != null) adminEmails.add(cEmail);
+        }
+        if (chat.getAdmins() != null) {
+            for (com.btctech.mailapp.entity.User u : chat.getAdmins()) {
+                String aEmail = u.getEmail() != null ? u.getEmail() : u.getUsername();
+                if (aEmail != null) adminEmails.add(aEmail);
+            }
+        }
+        dto.setAdminEmails(new java.util.ArrayList<>(adminEmails));
         
         // Populate last message info efficiently
         chatMessageRepository.findFirstByChatOrderByTimestampDesc(chat).ifPresentOrElse(last -> {
@@ -177,12 +192,38 @@ public class ChatController {
     }
 
     @GetMapping("/{chatId}/broadcasts")
-    public ResponseEntity<List<BroadcastResponse>> getBroadcasts(@PathVariable Long chatId) {
-        List<com.btctech.mailapp.entity.GroupBroadcast> list = chatService.getBroadcasts(chatId);
+    public ResponseEntity<List<BroadcastResponse>> getBroadcasts(
+            @PathVariable Long chatId,
+            org.springframework.security.core.Authentication authentication) {
+        String userEmail = authentication != null ? authentication.getName() : null;
+        List<com.btctech.mailapp.entity.GroupBroadcast> list = userEmail != null 
+                ? chatService.getBroadcasts(chatId, userEmail)
+                : chatService.getBroadcasts(chatId);
         List<BroadcastResponse> response = list.stream()
                 .map(this::convertToBroadcastResponse)
                 .collect(Collectors.toList());
         return ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/{chatId}/members/role")
+    public ResponseEntity<?> updateMemberRole(
+            @PathVariable Long chatId,
+            @RequestBody ChatDTO.UpdateMemberRoleRequest request,
+            org.springframework.security.core.Authentication authentication) {
+        if (request == null || request.getEmail() == null || request.getRole() == null) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Email and role are required"));
+        }
+        String requesterEmail = authentication.getName();
+        Chat updated = chatService.updateMemberRole(chatId, request.getEmail(), request.getRole(), requesterEmail);
+        return ResponseEntity.ok(convertToDTO(updated));
+    }
+
+    @PostMapping("/{chatId}/members/role")
+    public ResponseEntity<?> updateMemberRolePost(
+            @PathVariable Long chatId,
+            @RequestBody ChatDTO.UpdateMemberRoleRequest request,
+            org.springframework.security.core.Authentication authentication) {
+        return updateMemberRole(chatId, request, authentication);
     }
 
     @lombok.Data

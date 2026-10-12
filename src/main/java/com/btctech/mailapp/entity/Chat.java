@@ -29,6 +29,14 @@ public class Chat {
     )
     private Set<User> members = new HashSet<>();
 
+    @ManyToMany
+    @JoinTable(
+        name = "chat_admins",
+        joinColumns = @JoinColumn(name = "chat_id"),
+        inverseJoinColumns = @JoinColumn(name = "user_id")
+    )
+    private Set<User> admins = new HashSet<>();
+
     @ManyToOne
     @JoinColumn(name = "creator_id")
     private User creator;
