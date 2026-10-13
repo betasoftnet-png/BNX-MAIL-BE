@@ -2,9 +2,11 @@ package com.btctech.mailapp.service;
 
 import com.btctech.mailapp.dto.BlockedContactDTO;
 import com.btctech.mailapp.entity.BlockedContact;
+import com.btctech.mailapp.entity.User;
 import com.btctech.mailapp.repository.BlockedContactRepository;
-import lombok.RequiredArgsConstructor;
+import com.btctech.mailapp.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,14 +17,25 @@ import java.util.regex.Pattern;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class BlockedContactService {
 
     private final BlockedContactRepository blockedContactRepository;
+    private final UserRepository userRepository;
 
     private static final Pattern EMAIL_PATTERN = Pattern.compile(
             "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
     );
+
+    @Autowired
+    public BlockedContactService(BlockedContactRepository blockedContactRepository,
+                                 @org.springframework.context.annotation.Lazy UserRepository userRepository) {
+        this.blockedContactRepository = blockedContactRepository;
+        this.userRepository = userRepository;
+    }
+
+    public BlockedContactService(BlockedContactRepository blockedContactRepository) {
+        this(blockedContactRepository, null);
+    }
 
     /**
      * Normalize email: trim leading/trailing whitespace and convert to lowercase.
@@ -32,6 +45,27 @@ public class BlockedContactService {
             return null;
         }
         return email.trim().toLowerCase();
+    }
+
+    /**
+     * Resolve email or username identifier to normalized email address.
+     */
+    public String resolveToEmail(String identifier) {
+        if (identifier == null) return null;
+        String normalized = normalizeEmail(identifier);
+        if (normalized == null || normalized.isEmpty()) return null;
+        if (isValidEmail(normalized)) {
+            return normalized;
+        }
+        if (userRepository != null) {
+            try {
+                Optional<User> u = userRepository.findByUsername(normalized);
+                if (u.isPresent() && u.get().getEmail() != null) {
+                    return normalizeEmail(u.get().getEmail());
+                }
+            } catch (Exception ignored) {}
+        }
+        return normalized;
     }
 
     /**
@@ -50,14 +84,14 @@ public class BlockedContactService {
      */
     @Transactional
     public void blockSender(String userEmail, String rawSenderEmail) {
-        String normalizedUser = normalizeEmail(userEmail);
-        String normalizedSender = normalizeEmail(rawSenderEmail);
+        String normalizedUser = resolveToEmail(userEmail);
+        String normalizedSender = resolveToEmail(rawSenderEmail);
 
         if (normalizedUser == null || normalizedUser.isEmpty()) {
             throw new IllegalArgumentException("Authenticated user email is required");
         }
 
-        if (!isValidEmail(normalizedSender)) {
+        if (normalizedSender == null || normalizedSender.isEmpty() || !isValidEmail(normalizedSender)) {
             throw new IllegalArgumentException("Invalid sender email address");
         }
 
@@ -84,8 +118,8 @@ public class BlockedContactService {
      */
     @Transactional
     public void unblockSender(String userEmail, String rawSenderEmail) {
-        String normalizedUser = normalizeEmail(userEmail);
-        String normalizedSender = normalizeEmail(rawSenderEmail);
+        String normalizedUser = resolveToEmail(userEmail);
+        String normalizedSender = resolveToEmail(rawSenderEmail);
 
         if (normalizedUser == null || normalizedUser.isEmpty()) {
             throw new IllegalArgumentException("Authenticated user email is required");
@@ -97,6 +131,10 @@ public class BlockedContactService {
 
         try {
             blockedContactRepository.deleteByUserEmailAndBlockedEmail(normalizedUser, normalizedSender);
+            String rawSender = normalizeEmail(rawSenderEmail);
+            if (rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender)) {
+                blockedContactRepository.deleteByUserEmailAndBlockedEmail(normalizedUser, rawSender);
+            }
             log.info("✓ Unblocked sender '{}' for user '{}'", normalizedSender, normalizedUser);
         } catch (Exception e) {
             log.error("Database error unblocking sender '{}' for user '{}': {}", normalizedSender, normalizedUser, e.getMessage(), e);
@@ -108,15 +146,24 @@ public class BlockedContactService {
      * Check whether a sender email is blocked for a user.
      */
     public boolean isSenderBlocked(String userEmail, String rawSenderEmail) {
-        String normalizedUser = normalizeEmail(userEmail);
-        String normalizedSender = normalizeEmail(rawSenderEmail);
+        String normalizedUser = resolveToEmail(userEmail);
+        String normalizedSender = resolveToEmail(rawSenderEmail);
 
         if (normalizedUser == null || normalizedSender == null || normalizedSender.isEmpty()) {
             return false;
         }
 
         try {
-            return blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, normalizedSender);
+            if (blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, normalizedSender)) {
+                return true;
+            }
+            String rawSender = normalizeEmail(rawSenderEmail);
+            if (rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender)) {
+                if (blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, rawSender)) {
+                    return true;
+                }
+            }
+            return false;
         } catch (Exception e) {
             log.error("Database error checking block status for user '{}' and sender '{}': {}", normalizedUser, normalizedSender, e.getMessage());
             return false;
@@ -127,8 +174,8 @@ public class BlockedContactService {
      * Get optional BlockedContact entity for a user and sender.
      */
     public Optional<BlockedContact> getBlockedContact(String userEmail, String rawSenderEmail) {
-        String normalizedUser = normalizeEmail(userEmail);
-        String normalizedSender = normalizeEmail(rawSenderEmail);
+        String normalizedUser = resolveToEmail(userEmail);
+        String normalizedSender = resolveToEmail(rawSenderEmail);
 
         if (normalizedUser == null || normalizedSender == null) {
             return Optional.empty();
@@ -146,7 +193,7 @@ public class BlockedContactService {
      * Get all blocked contacts for a specific authenticated user.
      */
     public List<BlockedContactDTO> getBlockedContacts(String userEmail) {
-        String normalizedUser = normalizeEmail(userEmail);
+        String normalizedUser = resolveToEmail(userEmail);
         if (normalizedUser == null || normalizedUser.isEmpty()) {
             return List.of();
         }
@@ -169,7 +216,7 @@ public class BlockedContactService {
      * Get raw list of blocked email strings for a user.
      */
     public List<String> getBlockedSenderEmails(String userEmail) {
-        String normalizedUser = normalizeEmail(userEmail);
+        String normalizedUser = resolveToEmail(userEmail);
         if (normalizedUser == null || normalizedUser.isEmpty()) {
             return List.of();
         }

@@ -30,6 +30,7 @@ public class CasboxService {
     private final ConnectionService connectionService;
     private final UserService userService;
     private final UserRepository userRepository;
+    private final BlockedContactService blockedContactService;
 
     @Autowired
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
@@ -37,36 +38,59 @@ public class CasboxService {
                          ContactAliasService contactAliasService,
                          @org.springframework.context.annotation.Lazy ConnectionService connectionService,
                          @org.springframework.context.annotation.Lazy UserService userService,
-                         UserRepository userRepository) {
+                         UserRepository userRepository,
+                         @org.springframework.context.annotation.Lazy BlockedContactService blockedContactService) {
         this.casboxMessageRepository = casboxMessageRepository;
         this.messagingTemplate = messagingTemplate;
         this.contactAliasService = contactAliasService;
         this.connectionService = connectionService;
         this.userService = userService;
         this.userRepository = userRepository;
+        this.blockedContactService = blockedContactService;
+    }
+
+    public CasboxService(CasboxMessageRepository casboxMessageRepository,
+                         SimpMessagingTemplate messagingTemplate,
+                         ContactAliasService contactAliasService,
+                         ConnectionService connectionService,
+                         UserService userService,
+                         UserRepository userRepository) {
+        this(casboxMessageRepository, messagingTemplate, contactAliasService, connectionService, userService, userRepository, null);
     }
 
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate,
                          ContactAliasService contactAliasService,
                          ConnectionService connectionService) {
-        this(casboxMessageRepository, messagingTemplate, contactAliasService, connectionService, null, null);
+        this(casboxMessageRepository, messagingTemplate, contactAliasService, connectionService, null, null, null);
     }
 
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate,
                          ContactAliasService contactAliasService) {
-        this(casboxMessageRepository, messagingTemplate, contactAliasService, null, null, null);
+        this(casboxMessageRepository, messagingTemplate, contactAliasService, null, null, null, null);
     }
 
     // Backwards-compatible constructor for testing and mock setups
     public CasboxService(CasboxMessageRepository casboxMessageRepository,
                          SimpMessagingTemplate messagingTemplate) {
-        this(casboxMessageRepository, messagingTemplate, null, null, null, null);
+        this(casboxMessageRepository, messagingTemplate, null, null, null, null, null);
     }
 
     @Transactional
     public CasboxMessageDto sendMessage(String senderEmail, CasboxSendRequest request) {
+        if (blockedContactService != null) {
+            String recipientEmail = request.getReceiverEmail();
+            // Check if recipient has blocked sender
+            if (blockedContactService.isSenderBlocked(recipientEmail, senderEmail)) {
+                throw new com.btctech.mailapp.exception.MailException("You cannot send messages to this user.");
+            }
+            // Check if sender has blocked recipient
+            if (blockedContactService.isSenderBlocked(senderEmail, recipientEmail)) {
+                throw new com.btctech.mailapp.exception.MailException("You cannot send messages to this user because you have blocked them.");
+            }
+        }
+
         if (connectionService != null) {
             com.btctech.mailapp.entity.User sender = connectionService.resolveUser(senderEmail);
             com.btctech.mailapp.entity.User receiver = connectionService.resolveUser(request.getReceiverEmail());
@@ -116,8 +140,25 @@ public class CasboxService {
     @Transactional(readOnly = true)
     public List<CasboxMessageDto> getThread(String email1, String email2) {
         Map<String, String> aliasMap = getAliasLookupMap(email1);
+        java.util.Set<String> blockedSenders = Collections.emptySet();
+        if (blockedContactService != null && email1 != null) {
+            try {
+                blockedSenders = new java.util.HashSet<>(blockedContactService.getBlockedSenderEmails(email1));
+            } catch (Exception ignored) {}
+        }
+        final java.util.Set<String> finalBlocked = blockedSenders;
+
         return casboxMessageRepository.findConversation(email1, email2)
                 .stream()
+                .filter(m -> {
+                    if (!finalBlocked.isEmpty()) {
+                        String sEmail = m.getSenderEmail() != null ? m.getSenderEmail().toLowerCase() : "";
+                        if (finalBlocked.contains(sEmail)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                })
                 .map(m -> convertToDto(m, email1, aliasMap))
                 .collect(Collectors.toList());
     }
@@ -135,10 +176,25 @@ public class CasboxService {
             } catch (Exception ignored) {}
         }
 
+        java.util.Set<String> blockedSenders = Collections.emptySet();
+        if (blockedContactService != null && userEmail != null) {
+            try {
+                blockedSenders = new java.util.HashSet<>(blockedContactService.getBlockedSenderEmails(userEmail));
+            } catch (Exception ignored) {}
+        }
+
         final java.util.Set<String> disconnected = disconnectedIdentifiers;
+        final java.util.Set<String> finalBlocked = blockedSenders;
+
         return casboxMessageRepository.findAllMessagesForUser(userEmail)
                 .stream()
                 .filter(m -> {
+                    if (!finalBlocked.isEmpty()) {
+                        String sEmail = m.getSenderEmail() != null ? m.getSenderEmail().toLowerCase() : "";
+                        if (finalBlocked.contains(sEmail)) {
+                            return false;
+                        }
+                    }
                     if (disconnected == null || disconnected.isEmpty()) return true;
                     String otherEmail = userEmail != null && userEmail.equalsIgnoreCase(m.getSenderEmail())
                             ? m.getReceiverEmail() : m.getSenderEmail();
