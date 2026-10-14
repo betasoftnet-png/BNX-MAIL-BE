@@ -7,7 +7,6 @@ import com.btctech.mailapp.dto.CasboxSendRequest;
 import com.btctech.mailapp.dto.CasboxStatusRequest;
 import com.btctech.mailapp.service.CasboxService;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -16,10 +15,13 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/casbox")
-@RequiredArgsConstructor
 public class CasboxController {
 
     private final CasboxService casboxService;
+
+    public CasboxController(CasboxService casboxService) {
+        this.casboxService = casboxService;
+    }
 
     @PostMapping("/send")
     public ResponseEntity<CasboxMessageDto> sendMessage(
