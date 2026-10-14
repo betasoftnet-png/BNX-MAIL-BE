@@ -184,6 +184,9 @@ public class MailReceiveService {
             for (int i = messages.length - 1; i >= 0; i--) {
                 try {
                     Message msg = messages[i];
+                    if (msg.isExpunged() || msg.isSet(Flags.Flag.DELETED)) {
+                        continue;
+                    }
                     String subject = msg.getSubject();
                     if (subject != null && subject.toLowerCase().contains("[colab#")) {
                         continue;
@@ -1011,34 +1014,81 @@ public class MailReceiveService {
         setSeenFlag(email, password, uid, false);
     }
 
+    private boolean isEligibleUnreadInboxMessage(Message msg, Map<String, LocalDateTime> blockedMap) {
+        if (msg == null) return false;
+        try {
+            if (msg.isExpunged() || msg.isSet(Flags.Flag.DELETED) || msg.isSet(Flags.Flag.SEEN)) {
+                return false;
+            }
+            String subject = msg.getSubject();
+            if (subject != null && subject.toLowerCase().contains("[colab#")) {
+                return false;
+            }
+            if (blockedMap != null && !blockedMap.isEmpty()) {
+                Address[] from = msg.getFrom();
+                if (from != null && from.length > 0) {
+                    String cleanFrom = extractEmailAddress(from[0].toString());
+                    if (cleanFrom != null) {
+                        String cleanLower = cleanFrom.toLowerCase();
+                        if (blockedMap.containsKey(cleanLower)) {
+                            LocalDateTime blockedAt = blockedMap.get(cleanLower);
+                            java.util.Date sentDate = msg.getSentDate();
+                            LocalDateTime msgTime = (sentDate != null) ?
+                                    sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
+                                    LocalDateTime.now();
+                            if (!msgTime.isBefore(blockedAt)) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to check if message is eligible unread: {}", e.getMessage());
+            return false;
+        }
+    }
+
     private void setSeenFlag(String email, String password, String uid, boolean seen) {
         jakarta.mail.Store store = null;
-        jakarta.mail.Folder inbox = null;
+        jakarta.mail.Folder folder = null;
         try {
             store = connect(email, password);
-
-            inbox = store.getFolder("INBOX");
-            inbox.open(jakarta.mail.Folder.READ_WRITE);
-
-            if (!(inbox instanceof jakarta.mail.UIDFolder)) {
-                throw new MailException("INBOX does not support persistent UIDs.");
-            }
-            jakarta.mail.UIDFolder uidInbox = (jakarta.mail.UIDFolder) inbox;
-
             long numericUid = Long.parseLong(uid);
-            jakarta.mail.Message message = uidInbox.getMessageByUID(numericUid);
 
-            if (message == null) {
-                throw new MailException("Email with UID " + uid + " no longer exists in INBOX");
+            String[] candidates = {"INBOX", "Archive", "Trash", "Spam", "Sent"};
+            jakarta.mail.Message message = null;
+
+            for (String cand : candidates) {
+                try {
+                    jakarta.mail.Folder f = store.getFolder(cand);
+                    if (f.exists()) {
+                        f.open(jakarta.mail.Folder.READ_WRITE);
+                        if (f instanceof jakarta.mail.UIDFolder) {
+                            jakarta.mail.Message m = ((jakarta.mail.UIDFolder) f).getMessageByUID(numericUid);
+                            if (m != null) {
+                                message = m;
+                                folder = f;
+                                break;
+                            }
+                        }
+                        f.close(false);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            if (message == null || folder == null || !folder.isOpen()) {
+                throw new MailException("Email with UID " + uid + " not found");
             }
 
             message.setFlag(jakarta.mail.Flags.Flag.SEEN, seen);
-            log.info("Marked message {} as {} for {}", uid, seen ? "read" : "unread", email);
+            log.info("Marked message {} as {} in folder {} for {}", uid, seen ? "read" : "unread", folder.getName(), email);
         } catch (Exception e) {
             log.error("Failed to set seen flag to {}: {}", seen, e.getMessage(), e);
             throw new MailException("Failed to update read status: " + e.getMessage());
         } finally {
-            cleanup(store, inbox);
+            cleanup(store, folder);
         }
     }
 
@@ -1050,6 +1100,9 @@ public class MailReceiveService {
             processUnsubscribedEmails(store, email);
 
             inbox = store.getFolder("INBOX");
+            if (!inbox.exists()) {
+                return 0;
+            }
             inbox.open(Folder.READ_ONLY);
 
             Map<String, LocalDateTime> blockedMap = new HashMap<>();
@@ -1062,33 +1115,8 @@ public class MailReceiveService {
 
             int unreadCount = 0;
             for (Message msg : messages) {
-                try {
-                    String subject = msg.getSubject();
-                    if (subject != null && subject.toLowerCase().contains("[colab#")) {
-                        continue;
-                    }
-                    if (!blockedMap.isEmpty()) {
-                        Address[] from = msg.getFrom();
-                        if (from != null && from.length > 0) {
-                            String cleanFrom = extractEmailAddress(from[0].toString());
-                            if (cleanFrom != null) {
-                                String cleanLower = cleanFrom.toLowerCase();
-                                if (blockedMap.containsKey(cleanLower)) {
-                                    LocalDateTime blockedAt = blockedMap.get(cleanLower);
-                                    java.util.Date sentDate = msg.getSentDate();
-                                    LocalDateTime msgTime = (sentDate != null) ?
-                                            sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
-                                            LocalDateTime.now();
-                                    if (!msgTime.isBefore(blockedAt)) {
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (isEligibleUnreadInboxMessage(msg, blockedMap)) {
                     unreadCount++;
-                } catch (Exception e) {
-                    log.warn("Failed to check unread message status: {}", e.getMessage());
                 }
             }
             return unreadCount;
@@ -1134,36 +1162,11 @@ public class MailReceiveService {
                 return new FolderResult(new ArrayList<>(), 0);
             }
 
-            // Filter out blocked senders and Colab messages
+            // Filter out deleted, seen, blocked senders and Colab messages
             List<Message> filteredMessages = new ArrayList<>();
             for (Message msg : messages) {
-                try {
-                    String subject = msg.getSubject();
-                    if (subject != null && subject.toLowerCase().contains("[colab#")) {
-                        continue;
-                    }
-                    if (!blockedMap.isEmpty()) {
-                        Address[] from = msg.getFrom();
-                        if (from != null && from.length > 0) {
-                            String cleanFrom = extractEmailAddress(from[0].toString());
-                            if (cleanFrom != null) {
-                                String cleanLower = cleanFrom.toLowerCase();
-                                if (blockedMap.containsKey(cleanLower)) {
-                                    LocalDateTime blockedAt = blockedMap.get(cleanLower);
-                                    java.util.Date sentDate = msg.getSentDate();
-                                    LocalDateTime msgTime = (sentDate != null) ?
-                                            sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
-                                            LocalDateTime.now();
-                                    if (!msgTime.isBefore(blockedAt)) {
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (isEligibleUnreadInboxMessage(msg, blockedMap)) {
                     filteredMessages.add(msg);
-                } catch (Exception e) {
-                    log.warn("Failed to check message for unread filter: {}", e.getMessage());
                 }
             }
 
@@ -1182,7 +1185,9 @@ public class MailReceiveService {
                 for (int i = endIndex - 1; i >= startIndex; i--) {
                     try {
                         Message msg = filteredMessages.get(i);
-                        emails.add(convertToDTO(msg, uidFolder, email));
+                        EmailDTO dto = convertToDTO(msg, uidFolder, email);
+                        dto.setRead(false);
+                        emails.add(dto);
                     } catch (Exception e) {
                         log.warn("Failed to convert unread message to DTO: {}", e.getMessage());
                     }
