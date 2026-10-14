@@ -158,4 +158,179 @@ class CasboxServiceTest {
 
         assertFalse(deleteCalled.get());
     }
+
+    @Test
+    @DisplayName("getThread preserves historical messages even when contact is blocked")
+    void testGetThreadPreservesHistoricalMessagesWhenContactBlocked() {
+        CasboxMessage msg1 = new CasboxMessage();
+        msg1.setId(1L);
+        msg1.setSenderEmail("alice@example.com");
+        msg1.setReceiverEmail("bob@example.com");
+        msg1.setBody("Hello Bob");
+        msg1.setStatus("SENT");
+        msg1.setTimestamp(java.time.LocalDateTime.now().minusHours(2));
+
+        CasboxMessage msg2 = new CasboxMessage();
+        msg2.setId(2L);
+        msg2.setSenderEmail("bob@example.com");
+        msg2.setReceiverEmail("alice@example.com");
+        msg2.setBody("Hi Alice");
+        msg2.setStatus("DELIVERED");
+        msg2.setTimestamp(java.time.LocalDateTime.now().minusHours(1));
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findConversation".equals(method.getName())) {
+                        return List.of(msg1, msg2);
+                    }
+                    return null;
+                }
+        );
+
+        com.btctech.mailapp.repository.BlockedContactRepository blockedRepo =
+                (com.btctech.mailapp.repository.BlockedContactRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.BlockedContactRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.BlockedContactRepository.class},
+                        (proxy, method, args) -> {
+                            if ("existsByUserEmailAndBlockedEmail".equals(method.getName())) {
+                                String user = (String) args[0];
+                                String blocked = (String) args[1];
+                                return "alice@example.com".equals(user) && "bob@example.com".equals(blocked);
+                            }
+                            return false;
+                        }
+                );
+
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
+
+        List<com.btctech.mailapp.dto.CasboxMessageDto> thread = service.getThread("alice@example.com", "bob@example.com");
+        assertEquals(2, thread.size(), "All historical messages must remain visible after block");
+        assertEquals("Hello Bob", thread.get(0).getBody());
+        assertEquals("Hi Alice", thread.get(1).getBody());
+    }
+
+    @Test
+    @DisplayName("getAllMessages preserves historical messages even when contact is blocked")
+    void testGetAllMessagesPreservesHistoricalMessagesWhenContactBlocked() {
+        CasboxMessage msg1 = new CasboxMessage();
+        msg1.setId(1L);
+        msg1.setSenderEmail("bob@example.com");
+        msg1.setReceiverEmail("alice@example.com");
+        msg1.setBody("Message from blocked user");
+        msg1.setStatus("SENT");
+        msg1.setTimestamp(java.time.LocalDateTime.now().minusDays(1));
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findAllMessagesForUser".equals(method.getName())) {
+                        return List.of(msg1);
+                    }
+                    return null;
+                }
+        );
+
+        com.btctech.mailapp.repository.BlockedContactRepository blockedRepo =
+                (com.btctech.mailapp.repository.BlockedContactRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.BlockedContactRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.BlockedContactRepository.class},
+                        (proxy, method, args) -> {
+                            if ("existsByUserEmailAndBlockedEmail".equals(method.getName())) {
+                                String user = (String) args[0];
+                                String blocked = (String) args[1];
+                                return "alice@example.com".equals(user) && "bob@example.com".equals(blocked);
+                            }
+                            return false;
+                        }
+                );
+
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
+
+        List<com.btctech.mailapp.dto.CasboxMessageDto> all = service.getAllMessages("alice@example.com");
+        assertEquals(1, all.size(), "Historical messages from blocked user must be returned");
+        assertEquals("bob@example.com", all.get(0).getSenderEmail());
+    }
+
+    @Test
+    @DisplayName("sendMessage throws MailException when sender is blocked by recipient")
+    void testSendMessageThrowsWhenSenderBlockedByRecipient() {
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> null
+        );
+
+        com.btctech.mailapp.repository.BlockedContactRepository blockedRepo =
+                (com.btctech.mailapp.repository.BlockedContactRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.BlockedContactRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.BlockedContactRepository.class},
+                        (proxy, method, args) -> {
+                            if ("existsByUserEmailAndBlockedEmail".equals(method.getName())) {
+                                String user = (String) args[0];
+                                String blocked = (String) args[1];
+                                // User B (bob) blocked User A (alice)
+                                return "bob@example.com".equals(user) && "alice@example.com".equals(blocked);
+                            }
+                            return false;
+                        }
+                );
+
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
+
+        com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
+        req.setReceiverEmail("bob@example.com");
+        req.setSubject("Test");
+        req.setBody("Hello");
+
+        com.btctech.mailapp.exception.MailException ex = assertThrows(
+                com.btctech.mailapp.exception.MailException.class,
+                () -> service.sendMessage("alice@example.com", req)
+        );
+        assertEquals("You cannot send messages to this user.", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("sendMessage throws MailException when sender has blocked recipient")
+    void testSendMessageThrowsWhenRecipientBlockedBySender() {
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> null
+        );
+
+        com.btctech.mailapp.repository.BlockedContactRepository blockedRepo =
+                (com.btctech.mailapp.repository.BlockedContactRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.BlockedContactRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.BlockedContactRepository.class},
+                        (proxy, method, args) -> {
+                            if ("existsByUserEmailAndBlockedEmail".equals(method.getName())) {
+                                String user = (String) args[0];
+                                String blocked = (String) args[1];
+                                // User A (alice) blocked User B (bob)
+                                return "alice@example.com".equals(user) && "bob@example.com".equals(blocked);
+                            }
+                            return false;
+                        }
+                );
+
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
+
+        com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
+        req.setReceiverEmail("bob@example.com");
+        req.setSubject("Test");
+        req.setBody("Hello");
+
+        com.btctech.mailapp.exception.MailException ex = assertThrows(
+                com.btctech.mailapp.exception.MailException.class,
+                () -> service.sendMessage("alice@example.com", req)
+        );
+        assertEquals("You cannot send messages to this user because you have blocked them.", ex.getMessage());
+    }
 }

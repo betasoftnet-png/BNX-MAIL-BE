@@ -140,25 +140,8 @@ public class CasboxService {
     @Transactional(readOnly = true)
     public List<CasboxMessageDto> getThread(String email1, String email2) {
         Map<String, String> aliasMap = getAliasLookupMap(email1);
-        java.util.Set<String> blockedSenders = Collections.emptySet();
-        if (blockedContactService != null && email1 != null) {
-            try {
-                blockedSenders = new java.util.HashSet<>(blockedContactService.getBlockedSenderEmails(email1));
-            } catch (Exception ignored) {}
-        }
-        final java.util.Set<String> finalBlocked = blockedSenders;
-
         return casboxMessageRepository.findConversation(email1, email2)
                 .stream()
-                .filter(m -> {
-                    if (!finalBlocked.isEmpty()) {
-                        String sEmail = m.getSenderEmail() != null ? m.getSenderEmail().toLowerCase() : "";
-                        if (finalBlocked.contains(sEmail)) {
-                            return false;
-                        }
-                    }
-                    return true;
-                })
                 .map(m -> convertToDto(m, email1, aliasMap))
                 .collect(Collectors.toList());
     }
@@ -176,25 +159,11 @@ public class CasboxService {
             } catch (Exception ignored) {}
         }
 
-        java.util.Set<String> blockedSenders = Collections.emptySet();
-        if (blockedContactService != null && userEmail != null) {
-            try {
-                blockedSenders = new java.util.HashSet<>(blockedContactService.getBlockedSenderEmails(userEmail));
-            } catch (Exception ignored) {}
-        }
-
         final java.util.Set<String> disconnected = disconnectedIdentifiers;
-        final java.util.Set<String> finalBlocked = blockedSenders;
 
         return casboxMessageRepository.findAllMessagesForUser(userEmail)
                 .stream()
                 .filter(m -> {
-                    if (!finalBlocked.isEmpty()) {
-                        String sEmail = m.getSenderEmail() != null ? m.getSenderEmail().toLowerCase() : "";
-                        if (finalBlocked.contains(sEmail)) {
-                            return false;
-                        }
-                    }
                     if (disconnected == null || disconnected.isEmpty()) return true;
                     String otherEmail = userEmail != null && userEmail.equalsIgnoreCase(m.getSenderEmail())
                             ? m.getReceiverEmail() : m.getSenderEmail();

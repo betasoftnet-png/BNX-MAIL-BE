@@ -148,18 +148,29 @@ public class BlockedContactService {
     public boolean isSenderBlocked(String userEmail, String rawSenderEmail) {
         String normalizedUser = resolveToEmail(userEmail);
         String normalizedSender = resolveToEmail(rawSenderEmail);
+        String rawUser = normalizeEmail(userEmail);
+        String rawSender = normalizeEmail(rawSenderEmail);
 
-        if (normalizedUser == null || normalizedSender == null || normalizedSender.isEmpty()) {
+        if ((normalizedUser == null && rawUser == null) || (normalizedSender == null && rawSender == null)) {
             return false;
         }
 
         try {
-            if (blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, normalizedSender)) {
+            if (normalizedUser != null && normalizedSender != null &&
+                    blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, normalizedSender)) {
                 return true;
             }
-            String rawSender = normalizeEmail(rawSenderEmail);
-            if (rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender)) {
-                if (blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, rawSender)) {
+            if (normalizedUser != null && rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender) &&
+                    blockedContactRepository.existsByUserEmailAndBlockedEmail(normalizedUser, rawSender)) {
+                return true;
+            }
+            if (rawUser != null && !rawUser.equalsIgnoreCase(normalizedUser)) {
+                if (normalizedSender != null &&
+                        blockedContactRepository.existsByUserEmailAndBlockedEmail(rawUser, normalizedSender)) {
+                    return true;
+                }
+                if (rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender) &&
+                        blockedContactRepository.existsByUserEmailAndBlockedEmail(rawUser, rawSender)) {
                     return true;
                 }
             }
