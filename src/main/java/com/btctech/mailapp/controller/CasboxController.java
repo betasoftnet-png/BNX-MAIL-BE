@@ -1,6 +1,7 @@
 package com.btctech.mailapp.controller;
 
 import com.btctech.mailapp.dto.CasboxArchiveRequest;
+import com.btctech.mailapp.dto.CasboxEditRequest;
 import com.btctech.mailapp.dto.CasboxMessageDto;
 import com.btctech.mailapp.dto.CasboxSendRequest;
 import com.btctech.mailapp.dto.CasboxStatusRequest;
@@ -89,5 +90,32 @@ public class CasboxController {
         }
         casboxService.deleteConversation(userEmail, targetContact.trim());
         return ResponseEntity.ok().build();
+    }
+
+    @PatchMapping("/{id}")
+    public ResponseEntity<CasboxMessageDto> editMessage(
+            @PathVariable Long id,
+            @RequestBody CasboxEditRequest request,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        return ResponseEntity.ok(casboxService.editMessage(id, request, userEmail));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<CasboxMessageDto> editMessagePut(
+            @PathVariable Long id,
+            @RequestBody CasboxEditRequest request,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        return ResponseEntity.ok(casboxService.editMessage(id, request, userEmail));
+    }
+
+    @PatchMapping("/{id}/edit")
+    public ResponseEntity<CasboxMessageDto> editMessageExplicit(
+            @PathVariable Long id,
+            @RequestBody CasboxEditRequest request,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        return ResponseEntity.ok(casboxService.editMessage(id, request, userEmail));
     }
 }

@@ -333,4 +333,105 @@ class CasboxServiceTest {
         );
         assertEquals("You cannot send messages to this user because you have blocked them.", ex.getMessage());
     }
+
+    @Test
+    @DisplayName("editMessage within 5 minutes succeeds, updates body, sets isEdited, preserves metadata")
+    void testEditOwnMessageWithinFiveMinutesSuccess() {
+        CasboxMessage msg = new CasboxMessage();
+        msg.setId(101L);
+        msg.setSenderEmail("alice@example.com");
+        msg.setReceiverEmail("bob@example.com");
+        msg.setBody("Original text");
+        java.time.LocalDateTime originalTime = java.time.LocalDateTime.now().minusMinutes(2);
+        msg.setTimestamp(originalTime);
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        return Optional.of(msg);
+                    }
+                    if ("save".equals(method.getName())) {
+                        return args[0];
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        com.btctech.mailapp.dto.CasboxEditRequest request = new com.btctech.mailapp.dto.CasboxEditRequest("Corrected text");
+        com.btctech.mailapp.dto.CasboxMessageDto result = service.editMessage(101L, request, "alice@example.com");
+
+        assertNotNull(result);
+        assertEquals("Corrected text", result.getBody());
+        assertTrue(result.getIsEdited());
+        assertTrue(result.getEdited());
+        assertEquals(101L, result.getId());
+        assertEquals("alice@example.com", result.getSenderEmail());
+        assertEquals("bob@example.com", result.getReceiverEmail());
+        assertEquals(originalTime, result.getTimestamp());
+        assertEquals(originalTime, msg.getTimestamp()); // original creation timestamp not reset
+    }
+
+    @Test
+    @DisplayName("editMessage older than 5 minutes throws MailException")
+    void testEditMessageOlderThanFiveMinutesThrowsException() {
+        CasboxMessage msg = new CasboxMessage();
+        msg.setId(102L);
+        msg.setSenderEmail("alice@example.com");
+        msg.setReceiverEmail("bob@example.com");
+        msg.setBody("Old message");
+        msg.setTimestamp(java.time.LocalDateTime.now().minusMinutes(6)); // 6 minutes ago
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        return Optional.of(msg);
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        com.btctech.mailapp.dto.CasboxEditRequest request = new com.btctech.mailapp.dto.CasboxEditRequest("Attempted edit");
+
+        com.btctech.mailapp.exception.MailException ex = assertThrows(
+                com.btctech.mailapp.exception.MailException.class,
+                () -> service.editMessage(102L, request, "alice@example.com")
+        );
+        assertEquals("Messages can only be edited within 5 minutes of sending.", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("editMessage by another user throws AccessDeniedException")
+    void testEditAnotherUserMessageThrowsAccessDenied() {
+        CasboxMessage msg = new CasboxMessage();
+        msg.setId(103L);
+        msg.setSenderEmail("bob@example.com");
+        msg.setReceiverEmail("alice@example.com");
+        msg.setBody("Bob's message");
+        msg.setTimestamp(java.time.LocalDateTime.now().minusMinutes(1));
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        return Optional.of(msg);
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        com.btctech.mailapp.dto.CasboxEditRequest request = new com.btctech.mailapp.dto.CasboxEditRequest("Malicious edit");
+
+        assertThrows(
+                AccessDeniedException.class,
+                () -> service.editMessage(103L, request, "alice@example.com")
+        );
+    }
 }

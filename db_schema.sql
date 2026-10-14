@@ -321,10 +321,13 @@ CREATE TABLE IF NOT EXISTS casbox_messages (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     sender_archived BOOLEAN NOT NULL DEFAULT FALSE,
     receiver_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    is_edited BOOLEAN NOT NULL DEFAULT FALSE,
     INDEX idx_casbox_sender (sender_email),
     INDEX idx_casbox_receiver (receiver_email),
     INDEX idx_casbox_timestamp (timestamp)
 ) ENGINE=InnoDB;
+
+ALTER TABLE casbox_messages ADD COLUMN IF NOT EXISTS is_edited BOOLEAN DEFAULT FALSE;
 
 -- ==========================================
 -- TABLE: CONTACT_ALIASES (Custom display names for contacts per user)

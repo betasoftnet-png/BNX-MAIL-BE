@@ -41,11 +41,18 @@ public class CasboxMessage {
     @Column(name = "receiver_archived", nullable = false)
     private Boolean receiverArchived = false;
 
+    @Column(name = "is_edited", nullable = false)
+    private Boolean isEdited = false;
+
     public boolean isSenderArchived() {
         return senderArchived != null && senderArchived;
     }
 
     public boolean isReceiverArchived() {
         return receiverArchived != null && receiverArchived;
+    }
+
+    public boolean isEdited() {
+        return isEdited != null && isEdited;
     }
 }

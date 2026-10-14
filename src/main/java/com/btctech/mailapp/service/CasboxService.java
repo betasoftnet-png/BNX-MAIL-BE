@@ -1,5 +1,6 @@
 package com.btctech.mailapp.service;
 
+import com.btctech.mailapp.dto.CasboxEditRequest;
 import com.btctech.mailapp.dto.CasboxMessageDto;
 import com.btctech.mailapp.dto.CasboxSendRequest;
 import com.btctech.mailapp.entity.CasboxMessage;
@@ -354,6 +355,7 @@ public class CasboxService {
             }
         }
         dto.setIsAccepted(accepted);
+        dto.setIsEdited(entity.isEdited());
 
         return dto;
     }
@@ -487,5 +489,73 @@ public class CasboxService {
         }
 
         casboxMessageRepository.deleteConversation(userEmail.trim(), contactEmail);
+    }
+
+    @Transactional
+    public CasboxMessageDto editMessage(Long messageId, CasboxEditRequest request, String userEmail) {
+        if (messageId == null) {
+            throw new com.btctech.mailapp.exception.MailException("Message ID is required.");
+        }
+
+        CasboxMessage message = casboxMessageRepository.findById(messageId)
+                .orElseThrow(() -> new com.btctech.mailapp.exception.MailException("Message not found."));
+
+        // Validate that only the original sender can edit their own message
+        if (!isSameUser(userEmail, message.getSenderEmail())) {
+            throw new org.springframework.security.access.AccessDeniedException("You can only edit your own messages.");
+        }
+
+        // Validate 5-minute (300 seconds) limit based on original creation timestamp
+        LocalDateTime createdAt = message.getTimestamp();
+        if (createdAt != null) {
+            long seconds = java.time.Duration.between(createdAt, LocalDateTime.now()).getSeconds();
+            if (seconds > 300) {
+                throw new com.btctech.mailapp.exception.MailException("Messages can only be edited within 5 minutes of sending.");
+            }
+        }
+
+        String newBody = request != null ? request.getCleanBody() : "";
+        if (newBody == null || newBody.trim().isEmpty()) {
+            throw new com.btctech.mailapp.exception.MailException("Message content cannot be empty.");
+        }
+
+        // Update body and set isEdited = true, preserving original ID, sender, receiver, timestamp, status, attachments
+        message.setBody(newBody);
+        message.setIsEdited(true);
+
+        CasboxMessage saved = casboxMessageRepository.save(message);
+
+        Map<String, String> senderAliasMap = getAliasLookupMap(saved.getSenderEmail());
+        Map<String, String> receiverAliasMap = getAliasLookupMap(saved.getReceiverEmail());
+
+        CasboxMessageDto senderDto = convertToDto(saved, saved.getSenderEmail(), senderAliasMap);
+        CasboxMessageDto receiverDto = convertToDto(saved, saved.getReceiverEmail(), receiverAliasMap);
+
+        // Broadcast updated message via WebSocket to both receiver and sender so UI updates in real-time
+        if (messagingTemplate != null) {
+            messagingTemplate.convertAndSendToUser(
+                    saved.getReceiverEmail(),
+                    "/queue/casbox/messages",
+                    receiverDto
+            );
+
+            messagingTemplate.convertAndSendToUser(
+                    saved.getSenderEmail(),
+                    "/queue/casbox/messages",
+                    senderDto
+            );
+        }
+
+        return senderDto;
+    }
+
+    private boolean isSameUser(String user1, String user2) {
+        if (user1 == null || user2 == null) return false;
+        String norm1 = user1.trim().toLowerCase();
+        String norm2 = user2.trim().toLowerCase();
+        if (norm1.equals(norm2)) return true;
+        String local1 = norm1.contains("@") ? norm1.substring(0, norm1.indexOf("@")) : norm1;
+        String local2 = norm2.contains("@") ? norm2.substring(0, norm2.indexOf("@")) : norm2;
+        return local1.equals(local2);
     }
 }

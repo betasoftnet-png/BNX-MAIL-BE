@@ -56,4 +56,17 @@ public class CasboxMessageDto {
     public void setAccepted(Boolean accepted) {
         this.isAccepted = accepted;
     }
+
+    @JsonProperty("isEdited")
+    private Boolean isEdited = false;
+
+    @JsonProperty("edited")
+    public Boolean getEdited() {
+        return isEdited;
+    }
+
+    @JsonProperty("edited")
+    public void setEdited(Boolean edited) {
+        this.isEdited = edited;
+    }
 }

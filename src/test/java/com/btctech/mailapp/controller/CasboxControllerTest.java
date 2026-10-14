@@ -17,6 +17,7 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class CasboxControllerTest {
@@ -31,8 +32,25 @@ class CasboxControllerTest {
         public int deleteCallCount = 0;
         public boolean throwAccessDenied = false;
 
+        public Long lastEditMessageId;
+        public com.btctech.mailapp.dto.CasboxEditRequest lastEditRequest;
+        public int editCallCount = 0;
+
         public FakeCasboxService() {
             super(null, null);
+        }
+
+        @Override
+        public com.btctech.mailapp.dto.CasboxMessageDto editMessage(Long messageId, com.btctech.mailapp.dto.CasboxEditRequest request, String userEmail) {
+            this.lastEditMessageId = messageId;
+            this.lastEditRequest = request;
+            this.lastUserEmail = userEmail;
+            this.editCallCount++;
+            com.btctech.mailapp.dto.CasboxMessageDto dto = new com.btctech.mailapp.dto.CasboxMessageDto();
+            dto.setId(messageId);
+            dto.setBody(request != null ? request.getCleanBody() : "");
+            dto.setIsEdited(true);
+            return dto;
         }
 
         @Override
@@ -114,5 +132,21 @@ class CasboxControllerTest {
         } catch (Exception e) {
             assertTrue(e.getCause() instanceof AccessDeniedException || e instanceof AccessDeniedException);
         }
+    }
+
+    @Test
+    @DisplayName("PATCH /api/casbox/{id} should return 200 and invoke editMessage")
+    void testEditMessagePatchEndpoint() throws Exception {
+        String json = "{\"body\":\"Updated message content\"}";
+        mockMvc.perform(patch("/api/casbox/456")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content(json)
+                .principal(new UsernamePasswordAuthenticationToken(currentUser, "password")))
+                .andExpect(status().isOk());
+
+        assertEquals(1, fakeCasboxService.editCallCount);
+        assertEquals(456L, fakeCasboxService.lastEditMessageId);
+        assertEquals("Updated message content", fakeCasboxService.lastEditRequest.getCleanBody());
+        assertEquals(currentUser, fakeCasboxService.lastUserEmail);
     }
 }
