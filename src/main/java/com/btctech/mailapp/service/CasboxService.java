@@ -80,31 +80,43 @@ public class CasboxService {
 
     @Transactional
     public CasboxMessageDto sendMessage(String senderEmail, CasboxSendRequest request) {
+        if (request == null || request.getReceiverEmail() == null || request.getReceiverEmail().trim().isEmpty()) {
+            throw new com.btctech.mailapp.exception.MailException("Receiver email is required.");
+        }
+
+        String rawReceiver = request.getReceiverEmail().trim();
+
         if (blockedContactService != null) {
-            String recipientEmail = request.getReceiverEmail();
             // Check if recipient has blocked sender
-            if (blockedContactService.isSenderBlocked(recipientEmail, senderEmail)) {
+            if (blockedContactService.isSenderBlocked(rawReceiver, senderEmail)) {
                 throw new com.btctech.mailapp.exception.MailException("You cannot send messages to this user.");
             }
             // Check if sender has blocked recipient
-            if (blockedContactService.isSenderBlocked(senderEmail, recipientEmail)) {
+            if (blockedContactService.isSenderBlocked(senderEmail, rawReceiver)) {
                 throw new com.btctech.mailapp.exception.MailException("You cannot send messages to this user because you have blocked them.");
             }
         }
 
-        if (connectionService != null) {
-            com.btctech.mailapp.entity.User sender = connectionService.resolveUser(senderEmail);
-            com.btctech.mailapp.entity.User receiver = connectionService.resolveUser(request.getReceiverEmail());
-            if (sender != null && receiver != null) {
-                if (!connectionService.isConnectionActive(sender.getId(), receiver.getId())) {
-                    throw new com.btctech.mailapp.exception.MailException("Cannot send message. This connection is disconnected.");
-                }
+        User sender = connectionService != null ? connectionService.resolveUser(senderEmail) : resolveUser(senderEmail);
+        User receiver = connectionService != null ? connectionService.resolveUser(rawReceiver) : resolveUser(rawReceiver);
+
+        if (connectionService != null && sender != null && receiver != null) {
+            if (!connectionService.isConnectionActive(sender.getId(), receiver.getId())) {
+                throw new com.btctech.mailapp.exception.MailException("Cannot send message. This connection is disconnected.");
             }
         }
 
+        String canonicalSenderEmail = (sender != null && sender.getEmail() != null && !sender.getEmail().trim().isEmpty())
+                ? sender.getEmail().trim()
+                : (senderEmail != null ? senderEmail.trim() : "");
+
+        String canonicalReceiverEmail = (receiver != null && receiver.getEmail() != null && !receiver.getEmail().trim().isEmpty())
+                ? receiver.getEmail().trim()
+                : rawReceiver;
+
         CasboxMessage message = new CasboxMessage();
-        message.setSenderEmail(senderEmail);
-        message.setReceiverEmail(request.getReceiverEmail());
+        message.setSenderEmail(canonicalSenderEmail);
+        message.setReceiverEmail(canonicalReceiverEmail);
         message.setSubject(request.getSubject());
         message.setBody(request.getBody());
         message.setAttachmentsJson(request.getAttachmentsJson());
@@ -113,26 +125,40 @@ public class CasboxService {
 
         CasboxMessage saved = casboxMessageRepository.save(message);
 
-        Map<String, String> senderAliasMap = getAliasLookupMap(senderEmail);
-        Map<String, String> receiverAliasMap = getAliasLookupMap(request.getReceiverEmail());
+        Map<String, String> senderAliasMap = getAliasLookupMap(canonicalSenderEmail);
+        Map<String, String> receiverAliasMap = getAliasLookupMap(canonicalReceiverEmail);
 
-        CasboxMessageDto senderDto = convertToDto(saved, senderEmail, senderAliasMap);
-        CasboxMessageDto receiverDto = convertToDto(saved, request.getReceiverEmail(), receiverAliasMap);
+        CasboxMessageDto senderDto = convertToDto(saved, canonicalSenderEmail, senderAliasMap);
+        CasboxMessageDto receiverDto = convertToDto(saved, canonicalReceiverEmail, receiverAliasMap);
 
         // Send to receiver via WebSocket (private to receiver's view)
         if (messagingTemplate != null) {
             messagingTemplate.convertAndSendToUser(
-                    request.getReceiverEmail(),
+                    canonicalReceiverEmail,
                     "/queue/casbox/messages",
                     receiverDto
             );
+            if (!canonicalReceiverEmail.equalsIgnoreCase(rawReceiver)) {
+                messagingTemplate.convertAndSendToUser(
+                        rawReceiver,
+                        "/queue/casbox/messages",
+                        receiverDto
+                );
+            }
 
             // Also send to sender via WebSocket for instant UI update (private to sender's view)
             messagingTemplate.convertAndSendToUser(
-                    senderEmail,
+                    canonicalSenderEmail,
                     "/queue/casbox/messages",
                     senderDto
             );
+            if (senderEmail != null && !canonicalSenderEmail.equalsIgnoreCase(senderEmail.trim())) {
+                messagingTemplate.convertAndSendToUser(
+                        senderEmail.trim(),
+                        "/queue/casbox/messages",
+                        senderDto
+                );
+            }
         }
 
         return senderDto;
@@ -140,10 +166,19 @@ public class CasboxService {
 
     @Transactional(readOnly = true)
     public List<CasboxMessageDto> getThread(String email1, String email2) {
-        Map<String, String> aliasMap = getAliasLookupMap(email1);
-        return casboxMessageRepository.findConversation(email1, email2)
-                .stream()
-                .map(m -> convertToDto(m, email1, aliasMap))
+        User u1 = resolveUser(email1);
+        User u2 = resolveUser(email2);
+        String e1 = (u1 != null && u1.getEmail() != null) ? u1.getEmail() : email1;
+        String e2 = (u2 != null && u2.getEmail() != null) ? u2.getEmail() : email2;
+
+        Map<String, String> aliasMap = getAliasLookupMap(e1);
+        List<CasboxMessage> msgs = casboxMessageRepository.findConversation(e1, e2);
+        if (msgs.isEmpty() && (!e1.equalsIgnoreCase(email1) || !e2.equalsIgnoreCase(email2))) {
+            msgs = casboxMessageRepository.findConversation(email1, email2);
+        }
+
+        return msgs.stream()
+                .map(m -> convertToDto(m, e1, aliasMap))
                 .collect(Collectors.toList());
     }
 
