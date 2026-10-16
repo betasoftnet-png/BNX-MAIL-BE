@@ -76,6 +76,14 @@ public class JwtUtil {
         if (Boolean.TRUE.equals(user.getIsSubId()) && user.getParent() != null) {
             claims.put("is_sub_id", true);
             claims.put("parent_account", user.getParent().getUsername());
+            if (user.getBranchId() != null) {
+                claims.put("branch_id", user.getBranchId());
+                claims.put("branchId", user.getBranchId());
+            }
+            if (user.getBranchName() != null) {
+                claims.put("branch_name", user.getBranchName());
+                claims.put("branchName", user.getBranchName());
+            }
         }
         claims.put("app_name", "BNX Mail");
         return generateToken(claims, identifier, jwtExpiration);

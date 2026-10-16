@@ -76,6 +76,13 @@ public class SubIdController {
             if (request.getPermissions() != null) {
                 subId.setPermissions(new java.util.ArrayList<>(request.getPermissions()));
             }
+
+            if (request.getBranchId() != null) {
+                subId.setBranchId(request.getBranchId());
+            }
+            if (request.getBranchName() != null) {
+                subId.setBranchName(request.getBranchName());
+            }
             
             userRepository.save(subId);
 
@@ -85,8 +92,17 @@ public class SubIdController {
             mailReq.setPassword(request.getPassword());
             mailboxService.createCustomEmail(subId, mailReq, request.getPassword(), domain);
 
+            Map<String, Object> respData = new java.util.HashMap<>();
+            respData.put("subUsername", subUsername);
+            if (subId.getBranchId() != null) {
+                respData.put("branchId", subId.getBranchId());
+            }
+            if (subId.getBranchName() != null) {
+                respData.put("branchName", subId.getBranchName());
+            }
+
             return ResponseEntity.ok(ApiResponse.success(
-                    Map.of("subUsername", subUsername),
+                    respData,
                     "Sub-ID created successfully"
             ));
         } catch (Exception e) {
@@ -143,6 +159,44 @@ public class SubIdController {
         } catch (Exception e) {
             log.error("Failed to update permissions", e);
             return ResponseEntity.badRequest().body(ApiResponse.error("Failed to update permissions: " + e.getMessage()));
+        }
+    }
+
+    @PutMapping("/{subId}/branch")
+    public ResponseEntity<ApiResponse<Void>> updateBranch(
+            @PathVariable Long subId,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader("Authorization") String authHeader) {
+        try {
+            String token = authHeader.substring(7);
+            String identifier = jwtUtil.extractEmail(token);
+            User parent = userRepository.findByEmail(identifier)
+                    .orElseGet(() -> userRepository.findByUsername(identifier)
+                    .orElseThrow(() -> new RuntimeException("Parent user not found")));
+
+            User subUser = userRepository.findById(subId)
+                    .orElseThrow(() -> new RuntimeException("Sub-ID not found"));
+
+            if (subUser.getParent() == null || !subUser.getParent().getId().equals(parent.getId())) {
+                return ResponseEntity.status(403).body(ApiResponse.error("Unauthorized to modify this Sub-ID"));
+            }
+
+            if (body.containsKey("branchId") || body.containsKey("branch_id")) {
+                Object bId = body.containsKey("branchId") ? body.get("branchId") : body.get("branch_id");
+                subUser.setBranchId(bId != null ? Long.valueOf(bId.toString()) : null);
+            }
+
+            if (body.containsKey("branchName") || body.containsKey("branch_name")) {
+                Object bName = body.containsKey("branchName") ? body.get("branchName") : body.get("branch_name");
+                subUser.setBranchName(bName != null ? bName.toString() : null);
+            }
+
+            userRepository.save(subUser);
+
+            return ResponseEntity.ok(ApiResponse.success(null, "Branch updated successfully"));
+        } catch (Exception e) {
+            log.error("Failed to update branch", e);
+            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to update branch: " + e.getMessage()));
         }
     }
 }

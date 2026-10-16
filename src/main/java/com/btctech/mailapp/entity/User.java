@@ -53,6 +53,16 @@ public class User {
     @Column(name = "is_sub_id")
     private Boolean isSubId = false;
 
+    @com.fasterxml.jackson.annotation.JsonProperty("branchId")
+    @com.fasterxml.jackson.annotation.JsonAlias({"branch_id", "branchId"})
+    @Column(name = "branch_id")
+    private Long branchId;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("branchName")
+    @com.fasterxml.jackson.annotation.JsonAlias({"branch_name", "branchName"})
+    @Column(name = "branch_name", length = 150)
+    private String branchName;
+
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_permissions", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "permission_id")

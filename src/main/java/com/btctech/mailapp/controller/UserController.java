@@ -92,6 +92,8 @@ public class UserController {
         } else {
             data.put("isSubId", false);
         }
+        data.put("branchId", user.getBranchId());
+        data.put("branchName", user.getBranchName());
         
         boolean onboarded = true;
         if (user.getAccountType() == com.btctech.mailapp.entity.AccountType.BUSINESS) {

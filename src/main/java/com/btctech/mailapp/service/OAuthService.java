@@ -134,6 +134,15 @@ public class OAuthService {
             if (user.getPermissions() != null && !user.getPermissions().isEmpty()) {
                 claims.put("permissions", user.getPermissions());
             }
+
+            if (user.getBranchId() != null) {
+                claims.put("branch_id", user.getBranchId());
+                claims.put("branchId", user.getBranchId());
+            }
+            if (user.getBranchName() != null) {
+                claims.put("branch_name", user.getBranchName());
+                claims.put("branchName", user.getBranchName());
+            }
         }
         
         return jwtUtil.generateTokenWithClaims(claims, data.email);
