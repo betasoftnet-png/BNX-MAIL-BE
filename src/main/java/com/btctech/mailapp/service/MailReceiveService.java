@@ -218,6 +218,10 @@ public class MailReceiveService {
                 }
             }
 
+            if ("Drafts".equalsIgnoreCase(folderName)) {
+                emails = deduplicateDrafts(emails);
+            }
+
             return new FolderResult(emails, messageCount);
 
         } catch (MessagingException e) {
@@ -234,6 +238,52 @@ public class MailReceiveService {
 
     public FolderResult getDrafts(String email, String password, int page, int limit) {
         return getEmailsFromFolder(email, password, "Drafts", page, limit);
+    }
+
+    private List<EmailDTO> deduplicateDrafts(List<EmailDTO> draftList) {
+        if (draftList == null || draftList.size() <= 1) return draftList;
+        List<EmailDTO> unique = new ArrayList<>();
+
+        for (EmailDTO d : draftList) {
+            String to = d.getTo() != null ? d.getTo().trim().toLowerCase() : "";
+            String subj = d.getSubject() != null ? d.getSubject().trim().toLowerCase() : "";
+            String bodySnippet = d.getBody() != null ? (d.getBody().length() > 100 ? d.getBody().substring(0, 100) : d.getBody()) : "";
+
+            boolean isDuplicate = false;
+            for (EmailDTO existing : unique) {
+                String exTo = existing.getTo() != null ? existing.getTo().trim().toLowerCase() : "";
+                String exSubj = existing.getSubject() != null ? existing.getSubject().trim().toLowerCase() : "";
+                String exBodySnippet = existing.getBody() != null ? (existing.getBody().length() > 100 ? existing.getBody().substring(0, 100) : existing.getBody()) : "";
+                if (to.equals(exTo) && subj.equals(exSubj) && bodySnippet.equals(exBodySnippet)) {
+                    Date date1 = d.getSentDate() != null ? d.getSentDate() : d.getReceivedDate();
+                    Date date2 = existing.getSentDate() != null ? existing.getSentDate() : existing.getReceivedDate();
+                    if (date1 != null && date2 != null) {
+                        long diffMs = Math.abs(date1.getTime() - date2.getTime());
+                        if (diffMs < 300000L) { // within 5 minutes
+                            isDuplicate = true;
+                            if (d.isStarred() && !existing.isStarred()) {
+                                existing.setStarred(true);
+                            }
+                            if (d.getLabels() != null && !d.getLabels().isEmpty()) {
+                                if (existing.getLabels() == null) existing.setLabels(new ArrayList<>());
+                                for (var lbl : d.getLabels()) {
+                                    if (!existing.getLabels().contains(lbl)) existing.getLabels().add(lbl);
+                                }
+                            }
+                            break;
+                        }
+                    } else {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!isDuplicate) {
+                unique.add(d);
+            }
+        }
+        return unique;
     }
 
     /**
@@ -312,7 +362,7 @@ public class MailReceiveService {
                 .build();
     }
 
-    public void saveDraftToIMAP(String email, String password, SendMailRequest request) {
+    public EmailDTO saveDraftToIMAP(String email, String password, SendMailRequest request) {
         log.info("Saving draft to IMAP Drafts folder for {}", email);
         Store store = null;
         Folder draftsFolder = null;
@@ -355,7 +405,70 @@ public class MailReceiveService {
             message.saveChanges();
 
             draftsFolder.appendMessages(new Message[]{message});
-            log.info("✓ Draft message successfully saved to IMAP '{}' folder for {}", actualDraftsFolder, email);
+
+            String newUidStr = null;
+            EmailDTO dto = null;
+            if (draftsFolder instanceof UIDFolder uidFolder) {
+                int totalCount = draftsFolder.getMessageCount();
+                if (totalCount > 0) {
+                    Message lastMsg = draftsFolder.getMessage(totalCount);
+                    newUidStr = String.valueOf(uidFolder.getUID(lastMsg));
+                    dto = convertToDTO(lastMsg, uidFolder, email);
+                }
+            }
+
+            // If updating an existing draft, migrate stars and labels and remove old message
+            String existingUid = request.getUid();
+            if (existingUid != null && !existingUid.trim().isEmpty() && !existingUid.equals(newUidStr)) {
+                try {
+                    long oldNumUid = Long.parseLong(existingUid.trim());
+                    if (draftsFolder instanceof UIDFolder uidFolder) {
+                        Message oldMsg = uidFolder.getMessageByUID(oldNumUid);
+                        if (oldMsg != null) {
+                            oldMsg.setFlag(Flags.Flag.DELETED, true);
+                            log.info("Cleanly flagged previous draft UID {} as DELETED in {}", existingUid, actualDraftsFolder);
+                        }
+                    }
+
+                    // Preserve starred status
+                    List<StarredEmail> stars = starredEmailRepository.findByUserEmailAndUid(email, existingUid);
+                    if (!stars.isEmpty() && newUidStr != null) {
+                        for (StarredEmail star : stars) {
+                            star.setUid(newUidStr);
+                            star.setFolderName("Drafts");
+                            starredEmailRepository.save(star);
+                        }
+                        if (dto != null) dto.setStarred(true);
+                        log.info("Preserved STAR status from draft UID {} to new UID {}", existingUid, newUidStr);
+                    }
+
+                    // Preserve labels
+                    List<MailLabelMapping> labels = labelMappingRepository.findByUserEmailAndEmailUid(email, existingUid);
+                    if (!labels.isEmpty() && newUidStr != null) {
+                        for (MailLabelMapping label : labels) {
+                            label.setEmailUid(newUidStr);
+                            label.setFolderName("Drafts");
+                            labelMappingRepository.save(label);
+                        }
+                        if (dto != null) {
+                            dto.setLabels(labels.stream().map(MailLabelMapping::getLabel).distinct().collect(java.util.stream.Collectors.toList()));
+                        }
+                        log.info("Preserved {} labels from draft UID {} to new UID {}", labels.size(), existingUid, newUidStr);
+                    }
+                } catch (Exception ex) {
+                    log.warn("Error migrating old draft UID {}: {}", existingUid, ex.getMessage());
+                }
+            }
+
+            // Expunge deleted old draft copies cleanly
+            try {
+                draftsFolder.expunge();
+            } catch (Exception ex) {
+                log.debug("Drafts expunge notice: {}", ex.getMessage());
+            }
+
+            log.info("✓ Draft message successfully saved to IMAP '{}' folder for {} (UID: {})", actualDraftsFolder, email, newUidStr);
+            return dto != null ? dto : new EmailDTO();
 
         } catch (Exception e) {
             log.error("Failed to save draft to IMAP: {}", e.getMessage(), e);

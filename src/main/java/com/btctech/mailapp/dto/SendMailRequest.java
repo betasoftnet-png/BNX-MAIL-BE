@@ -37,4 +37,8 @@ public class SendMailRequest {
     }
 
     private java.util.List<AttachmentInfo> attachments;
+
+    private String uid;
+
+    private Long id;
 }

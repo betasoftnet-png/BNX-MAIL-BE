@@ -667,14 +667,14 @@ public class MailReceiveController {
      * Save draft to IMAP server
      */
     @PostMapping("/draft")
-    public ResponseEntity<ApiResponse<Void>> saveDraft(
+    public ResponseEntity<ApiResponse<EmailDTO>> saveDraft(
             @RequestBody SendMailRequest request,
             @RequestHeader("Authorization") String authHeader,
             Authentication authentication) {
 
         try {
             String email = authentication.getName();
-            log.info("Save draft request from: {}", email);
+            log.info("Save draft request from: {} (existing UID: {})", email, request.getUid());
 
             String token = authHeader.substring(7);
             String password = sessionService.getPasswordFromSession(token);
@@ -684,10 +684,10 @@ public class MailReceiveController {
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
 
-            mailReceiveService.saveDraftToIMAP(email, password, request);
+            EmailDTO savedDraft = mailReceiveService.saveDraftToIMAP(email, password, request);
 
             return ResponseEntity.ok(
-                    ApiResponse.success(null, "Draft saved successfully"));
+                    ApiResponse.success(savedDraft, "Draft saved successfully"));
 
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
