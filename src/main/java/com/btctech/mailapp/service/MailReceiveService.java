@@ -38,6 +38,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.Date;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -480,6 +481,22 @@ public class MailReceiveService {
         List<StarredEmail> starredMappings = starredEmailRepository.findByUserEmail(email);
         if (starredMappings.isEmpty()) return new FolderResult(new ArrayList<>(), 0);
 
+        // Sort starredMappings newest first by starredAt / ID
+        starredMappings.sort((a, b) -> {
+            if (a.getStarredAt() != null && b.getStarredAt() != null) {
+                int cmp = b.getStarredAt().compareTo(a.getStarredAt());
+                if (cmp != 0) return cmp;
+            } else if (a.getStarredAt() != null) {
+                return -1;
+            } else if (b.getStarredAt() != null) {
+                return 1;
+            }
+            if (a.getId() != null && b.getId() != null) {
+                return b.getId().compareTo(a.getId());
+            }
+            return 0;
+        });
+
         int totalCount = starredMappings.size();
         int startIndex = (page - 1) * limit;
         if (startIndex >= totalCount) return new FolderResult(new ArrayList<>(), totalCount);
@@ -528,6 +545,28 @@ public class MailReceiveService {
                     log.warn("Failed to fetch starred email for UID {}: {}", mapping.getUid(), e.getMessage());
                 }
             }
+
+            // Sort starred emails descending by actual sent/received timestamp (newest first)
+            starredEmails.sort((a, b) -> {
+                java.util.Date dateA = a.getReceivedDate() != null ? a.getReceivedDate() : a.getSentDate();
+                java.util.Date dateB = b.getReceivedDate() != null ? b.getReceivedDate() : b.getSentDate();
+                if (dateA == null && dateB == null) return 0;
+                if (dateA == null) return 1; // null dates go to bottom
+                if (dateB == null) return -1;
+                int cmp = dateB.compareTo(dateA);
+                if (cmp != 0) return cmp;
+                if (a.getUid() != null && b.getUid() != null) {
+                    try {
+                        long uidA = Long.parseLong(a.getUid());
+                        long uidB = Long.parseLong(b.getUid());
+                        return Long.compare(uidB, uidA);
+                    } catch (NumberFormatException ignored) {
+                        return b.getUid().compareTo(a.getUid());
+                    }
+                }
+                return 0;
+            });
+
             return new FolderResult(starredEmails, totalCount);
         } catch (MessagingException e) {
             log.error("Failed to connect for starred emails: {}", e.getMessage());
