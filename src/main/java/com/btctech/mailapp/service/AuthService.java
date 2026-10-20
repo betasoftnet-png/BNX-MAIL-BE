@@ -20,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.SimpleMailMessage;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import com.btctech.mailapp.dto.RecoveryOptionsResponse;
 import com.btctech.mailapp.dto.SendOtpRequest;
 import com.btctech.mailapp.dto.ResetPasswordRequest;
@@ -724,12 +725,13 @@ public class AuthService {
     }
 
     private final com.btctech.mailapp.repository.ExternalAppSessionRepository externalAppSessionRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
     /**
-     * Get all external application sessions for current user
+     * Get all active external application sessions for current user
      */
     public List<com.btctech.mailapp.dto.ExternalSessionResponse> getExternalSessions(User user) {
-        return externalAppSessionRepository.findByUserOrderByLoggedInAtDesc(user).stream()
+        return externalAppSessionRepository.findActiveByUserOrderByLoggedInAtDesc(user).stream()
                 .map(session -> com.btctech.mailapp.dto.ExternalSessionResponse.builder()
                         .id(session.getId())
                         .appName(session.getClientApp().getAppName())
@@ -754,8 +756,37 @@ public class AuthService {
             throw new MailException("Unauthorized to revoke this external session");
         }
 
-        externalAppSessionRepository.delete(session);
-        log.info("✓ External session {} revoked for user {}", sessionId, user.getUsername());
+        session.setRevoked(true);
+        session.setRevokedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Kolkata")));
+        externalAppSessionRepository.save(session);
+        log.info("✓ External session {} ({}) marked revoked for user {}", sessionId, session.getClientApp().getAppName(), user.getUsername());
+
+        broadcastSessionRevocation(session, user);
+    }
+
+    public void broadcastSessionRevocation(com.btctech.mailapp.entity.ExternalAppSession session, User user) {
+        if (messagingTemplate == null) return;
+        try {
+            java.util.Map<String, Object> payload = new java.util.HashMap<>();
+            payload.put("type", "SESSION_REVOKED");
+            payload.put("action", "REVOKE_SESSION");
+            payload.put("sessionId", session.getId());
+            payload.put("clientId", session.getClientApp().getClientId());
+            payload.put("appName", session.getClientApp().getAppName());
+            payload.put("userId", user.getId());
+            payload.put("email", user.getEmail());
+            payload.put("username", user.getUsername());
+            payload.put("timestamp", System.currentTimeMillis());
+            payload.put("message", "Your session has been revoked. Please log in again.");
+
+            messagingTemplate.convertAndSend("/topic/session-revocation", payload);
+            messagingTemplate.convertAndSend("/topic/oauth-revocation", payload);
+            messagingTemplate.convertAndSend("/topic/user/" + user.getId() + "/session-revocation", payload);
+            messagingTemplate.convertAndSend("/topic/client/" + session.getClientApp().getClientId() + "/session-revocation", payload);
+            log.info("✓ Broadcasted revocation event for session {} ({}) over WebSocket", session.getId(), session.getClientApp().getClientId());
+        } catch (Exception e) {
+            log.warn("Could not broadcast session revocation over WebSocket: {}", e.getMessage());
+        }
     }
 
     private String maskEmail(String email) {

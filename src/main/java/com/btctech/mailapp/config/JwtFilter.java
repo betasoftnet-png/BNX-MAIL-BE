@@ -30,6 +30,7 @@ public class JwtFilter extends OncePerRequestFilter {
     private final UserService userService;
     private final com.btctech.mailapp.repository.SystemSettingRepository systemSettingRepository;
     private final com.btctech.mailapp.repository.RefreshTokenRepository refreshTokenRepository;
+    private final com.btctech.mailapp.repository.ExternalAppSessionRepository externalAppSessionRepository;
     
     @Override
     protected void doFilterInternal(
@@ -105,12 +106,39 @@ public class JwtFilter extends OncePerRequestFilter {
                         }
                     }
 
+                    io.jsonwebtoken.Claims claims = null;
+                    try {
+                        claims = jwtUtil.extractAllClaims(jwt);
+                    } catch (Exception e) {
+                        log.debug("Could not parse all claims: {}", e.getMessage());
+                    }
+
+                    Object sessionIdObj = claims != null ? claims.get("session_id") : null;
+                    boolean isExternalToken = sessionIdObj != null || (claims != null && "oauth_access_token".equals(claims.get("token_type")));
+
+                    if (sessionIdObj != null) {
+                        try {
+                            Long extSessionId = Long.valueOf(sessionIdObj.toString());
+                            var extSessionOpt = externalAppSessionRepository.findById(extSessionId);
+                            if (extSessionOpt.isEmpty() || Boolean.TRUE.equals(extSessionOpt.get().getRevoked())) {
+                                log.warn("✗ Token rejected: External session {} is revoked or removed", extSessionId);
+                                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                                response.setContentType("application/json");
+                                response.getWriter().write("{\"error\": \"session_revoked\", \"message\": \"Your session has been revoked. Please log in again.\"}");
+                                return;
+                            }
+                        } catch (Exception ex) {
+                            log.warn("✗ Error verifying external app session ID: {}", ex.getMessage());
+                        }
+                    }
+
                     if (jwtUtil.validateToken(jwt, jwtSubject)) {
                         
                         // Check if user has active sessions (if no refresh tokens exist, they were force logged out)
-                        // Note: Temporary tokens for 2FA bypass this check as they haven't established a full session yet
+                        // Note: Temporary tokens for 2FA bypass this check as they haven't established a full session yet.
+                        // External OAuth tokens are validated against ExternalAppSession, so bypass refreshTokenRepository check.
                         boolean isTempToken = jwtSubject.startsWith("temp_");
-                        boolean hasActiveSessions = !refreshTokenRepository.findAllByUserAndRevokedFalse(user).isEmpty();
+                        boolean hasActiveSessions = isExternalToken || !refreshTokenRepository.findAllByUserAndRevokedFalse(user).isEmpty();
                         if (!isTempToken && !hasActiveSessions) {
                             log.warn("✗ Token rejected: User {} has no active sessions (forcefully logged out)", jwtSubject);
                             response.setStatus(401);

@@ -36,7 +36,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/users/profile-picture/**").permitAll()
                         .requestMatchers("/api/auth/register", "/api/auth/login/**", "/api/auth/refresh", "/api/auth/forgot-password/**", "/api/auth/reset-password", "/api/auth/username-suggestions", "/api/auth/child/**", "/api/auth/system-status", "/api/auth/appeal", "/api/auth/verify-business", "/api/auth/send-mobile-otp", "/api/auth/verify-mobile-otp", "/api/auth/fetch-gstins").permitAll()
                         .requestMatchers("/api/verification/status/**", "/api/verification/webhook").permitAll()
-                        .requestMatchers("/api/oauth/token").permitAll() // ✅ Public token exchange
+                        .requestMatchers("/api/oauth/token", "/api/oauth/check-session", "/api/oauth/introspect", "/api/oauth/revoke").permitAll() // ✅ OAuth endpoints
                         .requestMatchers("/api/webhooks/incoming-mail").permitAll() // ✅ Webhook
                         .requestMatchers("/api/mail/public/send", "/api/mail/public/schedule", "/api/mail/public/schedule/**").permitAll() // ✅ Public email sending/scheduling
                         .requestMatchers("/", "/index.html", "/error").permitAll()

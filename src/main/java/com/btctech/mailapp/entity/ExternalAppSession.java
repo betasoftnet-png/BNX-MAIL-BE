@@ -43,8 +43,23 @@ public class ExternalAppSession {
     @Column(name = "longitude")
     private String longitude;
 
+    @Builder.Default
+    @Column(name = "revoked")
+    private Boolean revoked = false;
+
+    @Column(name = "revoked_at")
+    private LocalDateTime revokedAt;
+
+    @Column(name = "token_jti")
+    private String tokenJti;
+
     @PrePersist
     protected void onCreate() {
-        loggedInAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Kolkata"));
+        if (loggedInAt == null) {
+            loggedInAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Kolkata"));
+        }
+        if (revoked == null) {
+            revoked = false;
+        }
     }
 }

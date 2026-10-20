@@ -105,6 +105,7 @@ public class OAuthService {
             System.err.println("Failed to fetch location for IP: " + ipAddress);
         }
 
+        String tokenJti = UUID.randomUUID().toString();
         com.btctech.mailapp.entity.ExternalAppSession session = com.btctech.mailapp.entity.ExternalAppSession.builder()
                 .user(user)
                 .clientApp(client)
@@ -113,8 +114,10 @@ public class OAuthService {
                 .location(location)
                 .latitude(lat)
                 .longitude(lon)
+                .revoked(false)
+                .tokenJti(tokenJti)
                 .build();
-        externalAppSessionRepository.save(session);
+        session = externalAppSessionRepository.save(session);
 
         // 3. Remove code after single use
         codeStore.remove(code);
@@ -122,6 +125,10 @@ public class OAuthService {
         // 4. Generate a new long-lived token for the client app with the app name included in the token payload
         Map<String, Object> claims = new java.util.HashMap<>();
         claims.put("app_name", client.getAppName());
+        claims.put("client_id", client.getClientId());
+        claims.put("session_id", session.getId());
+        claims.put("jti", tokenJti);
+        claims.put("token_type", "oauth_access_token");
         
         if (Boolean.TRUE.equals(user.getIsSubId()) && user.getParent() != null) {
             claims.put("is_sub_id", true);
