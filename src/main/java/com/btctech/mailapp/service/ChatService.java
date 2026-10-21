@@ -356,4 +356,24 @@ public class ChatService {
 
         return chatRepository.save(chat);
     }
+
+    @Transactional
+    public void deleteMessage(Long messageId, String userEmail) {
+        if (messageId == null || userEmail == null || userEmail.trim().isEmpty()) {
+            return;
+        }
+        ChatMessage msg = chatMessageRepository.findById(messageId).orElse(null);
+        if (msg == null) return;
+
+        Chat chat = msg.getChat();
+        String senderEmail = msg.getSenderEmail();
+        boolean isSender = (senderEmail != null && (senderEmail.trim().equalsIgnoreCase(userEmail.trim()) ||
+                (senderEmail.contains("@") && userEmail.contains("@") && senderEmail.split("@")[0].equalsIgnoreCase(userEmail.split("@")[0]))));
+        boolean isAdmin = chat != null && isChatAdmin(chat, userEmail);
+
+        if (!isSender && !isAdmin) {
+            throw new RuntimeException("Unauthorized: You cannot delete this message");
+        }
+        chatMessageRepository.delete(msg);
+    }
 }

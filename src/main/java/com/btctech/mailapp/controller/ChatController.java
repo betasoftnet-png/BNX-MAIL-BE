@@ -73,6 +73,15 @@ public class ChatController {
         messagingTemplate.convertAndSend("/topic/chat/" + request.getChatId(), response);
     }
 
+    @DeleteMapping("/message/{messageId}")
+    public ResponseEntity<?> deleteMessage(
+            @PathVariable Long messageId,
+            org.springframework.security.core.Authentication authentication) {
+        String userEmail = authentication.getName();
+        chatService.deleteMessage(messageId, userEmail);
+        return ResponseEntity.ok(Map.of("message", "Message deleted successfully"));
+    }
+
     private ChatDTO convertToDTO(Chat chat) {
         ChatDTO dto = new ChatDTO();
         dto.setId(chat.getId());
