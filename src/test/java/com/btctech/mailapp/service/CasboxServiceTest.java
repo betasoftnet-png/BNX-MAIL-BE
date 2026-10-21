@@ -434,4 +434,133 @@ class CasboxServiceTest {
                 () -> service.editMessage(103L, request, "alice@example.com")
         );
     }
+
+    @Test
+    @DisplayName("deleteMessage by sender deletes message")
+    void testDeleteMessageBySender() {
+        AtomicBoolean deleted = new AtomicBoolean(false);
+        CasboxMessage msg = new CasboxMessage();
+        msg.setId(201L);
+        msg.setSenderEmail("alice@example.com");
+        msg.setReceiverEmail("bob@example.com");
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        return Optional.of(msg);
+                    }
+                    if ("delete".equals(method.getName())) {
+                        deleted.set(true);
+                        return null;
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        service.deleteMessage(201L, "alice@example.com");
+
+        assertTrue(deleted.get());
+    }
+
+    @Test
+    @DisplayName("deleteMessage by receiver deletes message")
+    void testDeleteMessageByReceiver() {
+        AtomicBoolean deleted = new AtomicBoolean(false);
+        CasboxMessage msg = new CasboxMessage();
+        msg.setId(202L);
+        msg.setSenderEmail("alice@example.com");
+        msg.setReceiverEmail("bob@example.com");
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        return Optional.of(msg);
+                    }
+                    if ("delete".equals(method.getName())) {
+                        deleted.set(true);
+                        return null;
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        service.deleteMessage(202L, "bob@example.com");
+
+        assertTrue(deleted.get());
+    }
+
+    @Test
+    @DisplayName("deleteMessage by unauthorized third party throws AccessDeniedException")
+    void testDeleteMessageUnauthorized() {
+        CasboxMessage msg = new CasboxMessage();
+        msg.setId(203L);
+        msg.setSenderEmail("alice@example.com");
+        msg.setReceiverEmail("bob@example.com");
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        return Optional.of(msg);
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        assertThrows(
+                AccessDeniedException.class,
+                () -> service.deleteMessage(203L, "eve@example.com")
+        );
+    }
+
+    @Test
+    @DisplayName("deleteMessages deletes all specified messages")
+    void testDeleteMessagesBulk() {
+        Set<Long> deletedIds = new HashSet<>();
+        Map<Long, CasboxMessage> map = new HashMap<>();
+
+        CasboxMessage msg1 = new CasboxMessage();
+        msg1.setId(204L);
+        msg1.setSenderEmail("alice@example.com");
+        msg1.setReceiverEmail("bob@example.com");
+        map.put(204L, msg1);
+
+        CasboxMessage msg2 = new CasboxMessage();
+        msg2.setId(205L);
+        msg2.setSenderEmail("bob@example.com");
+        msg2.setReceiverEmail("alice@example.com");
+        map.put(205L, msg2);
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("findById".equals(method.getName())) {
+                        Long id = (Long) args[0];
+                        return Optional.ofNullable(map.get(id));
+                    }
+                    if ("delete".equals(method.getName())) {
+                        CasboxMessage toDel = (CasboxMessage) args[0];
+                        deletedIds.add(toDel.getId());
+                        return null;
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null);
+        service.deleteMessages(Arrays.asList(204L, 205L), "alice@example.com");
+
+        assertEquals(2, deletedIds.size());
+        assertTrue(deletedIds.contains(204L));
+        assertTrue(deletedIds.contains(205L));
+    }
 }

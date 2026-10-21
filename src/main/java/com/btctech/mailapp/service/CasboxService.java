@@ -527,6 +527,37 @@ public class CasboxService {
     }
 
     @Transactional
+    public void deleteMessage(Long messageId, String userEmail) {
+        if (messageId == null || userEmail == null || userEmail.trim().isEmpty()) {
+            return;
+        }
+
+        CasboxMessage message = casboxMessageRepository.findById(messageId).orElse(null);
+        if (message == null) {
+            return;
+        }
+
+        if (!isSameUser(userEmail, message.getSenderEmail()) && !isSameUser(userEmail, message.getReceiverEmail())) {
+            throw new org.springframework.security.access.AccessDeniedException("You are not authorized to delete this message.");
+        }
+
+        casboxMessageRepository.delete(message);
+    }
+
+    @Transactional
+    public void deleteMessages(List<Long> messageIds, String userEmail) {
+        if (messageIds == null || messageIds.isEmpty() || userEmail == null || userEmail.trim().isEmpty()) {
+            return;
+        }
+
+        for (Long id : messageIds) {
+            if (id != null) {
+                deleteMessage(id, userEmail);
+            }
+        }
+    }
+
+    @Transactional
     public CasboxMessageDto editMessage(Long messageId, CasboxEditRequest request, String userEmail) {
         if (messageId == null) {
             throw new com.btctech.mailapp.exception.MailException("Message ID is required.");

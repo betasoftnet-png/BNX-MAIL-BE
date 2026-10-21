@@ -94,6 +94,28 @@ public class CasboxController {
         return ResponseEntity.ok().build();
     }
 
+    @DeleteMapping("/message/{id}")
+    public ResponseEntity<Void> deleteMessage(
+            @PathVariable Long id,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        casboxService.deleteMessage(id, userEmail);
+        return ResponseEntity.ok().build();
+    }
+
+    @DeleteMapping("/messages")
+    public ResponseEntity<Void> deleteMessages(
+            @RequestBody(required = false) List<Long> messageIds,
+            @RequestParam(required = false) List<Long> ids,
+            Authentication authentication) {
+        String userEmail = authentication.getName();
+        List<Long> targets = (messageIds != null && !messageIds.isEmpty()) ? messageIds : ids;
+        if (targets != null && !targets.isEmpty()) {
+            casboxService.deleteMessages(targets, userEmail);
+        }
+        return ResponseEntity.ok().build();
+    }
+
     @PatchMapping("/{id}")
     public ResponseEntity<CasboxMessageDto> editMessage(
             @PathVariable Long id,
