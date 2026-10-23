@@ -490,7 +490,6 @@ public class CasboxService {
         return clean.matches("^[A-Za-z0-9+_.-]+@([A-Za-z0-9-]+\\.)+[A-Za-z]{2,}$");
     }
 
-    @Transactional(readOnly = true)
     public boolean isValidRecipient(String email) {
         if (email == null || email.trim().isEmpty()) {
             return false;
@@ -499,36 +498,39 @@ public class CasboxService {
         if (!isValidEmail(clean)) {
             return false;
         }
-        User user = resolveUser(clean);
-        return user != null;
+        try {
+            User user = resolveUser(clean);
+            return user != null;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private User resolveUser(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) return null;
         String clean = identifier.trim().toLowerCase();
 
-        if (connectionService != null) {
-            try {
-                User u = connectionService.resolveUser(clean);
-                if (u != null) return u;
-            } catch (Exception ignored) {}
-        }
-        if (userService != null) {
-            try {
-                User u = userService.getUserByEmailOrUsername(clean);
-                if (u != null) return u;
-            } catch (Exception ignored) {}
-        }
+        // 1. Direct indexed lookup by email in users table
         if (userRepository != null) {
             try {
-                Optional<User> byEmail = userRepository.findByEmail(clean);
-                if (byEmail.isPresent()) return byEmail.get();
                 Optional<User> byDirect = userRepository.findFirstByEmailIgnoreCase(clean);
                 if (byDirect.isPresent()) return byDirect.get();
+            } catch (Throwable ignored) {}
+        }
+
+        // 2. Direct indexed lookup by username in users table
+        if (userRepository != null) {
+            try {
                 Optional<User> byUser = userRepository.findByUsername(clean);
                 if (byUser.isPresent()) return byUser.get();
-                if (clean.contains("@")) {
-                    String local = clean.substring(0, clean.indexOf("@"));
+            } catch (Throwable ignored) {}
+        }
+
+        // 3. If identifier is an email (e.g. username@bnxmail.com), check by username prefix
+        if (clean.contains("@")) {
+            String local = clean.substring(0, clean.indexOf("@"));
+            if (userRepository != null) {
+                try {
                     Optional<User> byLocal = userRepository.findByUsername(local);
                     if (byLocal.isPresent()) {
                         User u = byLocal.get();
@@ -538,8 +540,30 @@ public class CasboxService {
                             return u;
                         }
                     }
-                }
-            } catch (Exception ignored) {}
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        // 4. Try connectionService and userService lookup safely
+        if (connectionService != null) {
+            try {
+                User u = connectionService.resolveUser(clean);
+                if (u != null) return u;
+            } catch (Throwable ignored) {}
+        }
+        if (userService != null) {
+            try {
+                User u = userService.getUserByEmailOrUsername(clean);
+                if (u != null) return u;
+            } catch (Throwable ignored) {}
+        }
+
+        // 5. Final fallback query on userRepository
+        if (userRepository != null) {
+            try {
+                Optional<User> byEmail = userRepository.findByEmail(clean);
+                if (byEmail.isPresent()) return byEmail.get();
+            } catch (Throwable ignored) {}
         }
         return null;
     }

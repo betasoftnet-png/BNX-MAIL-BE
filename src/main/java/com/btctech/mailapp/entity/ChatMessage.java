@@ -6,7 +6,10 @@ import java.time.LocalDateTime;
 
 @Data
 @Entity
-@Table(name = "messages")
+@Table(name = "messages", indexes = {
+    @Index(name = "idx_messages_chat_timestamp", columnList = "chat_id, timestamp"),
+    @Index(name = "idx_messages_chat_id", columnList = "chat_id")
+})
 public class ChatMessage {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

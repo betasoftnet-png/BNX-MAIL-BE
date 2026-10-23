@@ -91,6 +91,7 @@ public class ChatService {
         return chatRepository.findByMembersContaining(user);
     }
 
+    @Transactional(readOnly = true)
     public List<ChatMessage> getChatMessages(Long chatId) {
         Chat chat = chatRepository.findById(chatId)
                 .orElseThrow(() -> new RuntimeException("Chat not found"));

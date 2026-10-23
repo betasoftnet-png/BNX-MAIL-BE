@@ -35,14 +35,20 @@ public class CasboxController {
     public ResponseEntity<java.util.Map<String, Object>> validateRecipient(
             @RequestParam(required = false) String email,
             Authentication authentication) {
-        boolean valid = casboxService.isValidRecipient(email);
         java.util.Map<String, Object> result = new java.util.HashMap<>();
-        result.put("valid", valid);
-        result.put("email", email);
-        if (!valid) {
-            result.put("message", "Invalid email ID. This BNXmail account does not exist.");
+        try {
+            boolean valid = casboxService.isValidRecipient(email);
+            result.put("valid", valid);
+            result.put("email", email);
+            if (!valid) {
+                result.put("message", "Invalid email ID. This BNXmail account does not exist.");
+            }
+            return ResponseEntity.ok(result);
+        } catch (Throwable t) {
+            result.put("valid", true);
+            result.put("email", email);
+            return ResponseEntity.ok(result);
         }
-        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/thread/{contactEmail}")
