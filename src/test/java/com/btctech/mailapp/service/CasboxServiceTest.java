@@ -563,4 +563,150 @@ class CasboxServiceTest {
         assertTrue(deletedIds.contains(204L));
         assertTrue(deletedIds.contains(205L));
     }
+
+    @Test
+    @DisplayName("sendMessage throws MailException when recipient email is malformed")
+    void testSendMessageThrowsWhenRecipientEmailMalformed() {
+        CasboxService service = new CasboxService(null, null);
+
+        com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
+        req.setReceiverEmail("malformed-email");
+        req.setSubject("Test");
+        req.setBody("Hello");
+
+        com.btctech.mailapp.exception.MailException ex = assertThrows(
+                com.btctech.mailapp.exception.MailException.class,
+                () -> service.sendMessage("sender@example.com", req)
+        );
+        assertEquals("Invalid recipient email address.", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("sendMessage throws MailException when recipient does not exist in user database")
+    void testSendMessageThrowsWhenRecipientDoesNotExist() {
+        com.btctech.mailapp.repository.UserRepository userRepo =
+                (com.btctech.mailapp.repository.UserRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.UserRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.UserRepository.class},
+                        (proxy, method, args) -> {
+                            if ("findByEmail".equals(method.getName()) ||
+                                "findFirstByEmailIgnoreCase".equals(method.getName()) ||
+                                "findByUsername".equals(method.getName())) {
+                                return Optional.empty();
+                            }
+                            return null;
+                        }
+                );
+
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> null
+        );
+
+        CasboxService service = new CasboxService(repo, null, null, null, null, userRepo, null);
+
+        com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
+        req.setReceiverEmail("dilliprasath12233456778@bnxmail.com");
+        req.setSubject("Test");
+        req.setBody("Hello");
+
+        com.btctech.mailapp.exception.MailException ex = assertThrows(
+                com.btctech.mailapp.exception.MailException.class,
+                () -> service.sendMessage("sender@bnxmail.com", req)
+        );
+        assertEquals("Invalid recipient email address. This BNXmail account does not exist.", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("sendMessage succeeds when recipient exists in user database")
+    void testSendMessageSucceedsWhenRecipientExists() {
+        com.btctech.mailapp.entity.User receiverUser = new com.btctech.mailapp.entity.User();
+        receiverUser.setId(10L);
+        receiverUser.setUsername("bob");
+        receiverUser.setEmail("bob@bnxmail.com");
+
+        com.btctech.mailapp.entity.User senderUser = new com.btctech.mailapp.entity.User();
+        senderUser.setId(11L);
+        senderUser.setUsername("alice");
+        senderUser.setEmail("alice@bnxmail.com");
+
+        com.btctech.mailapp.repository.UserRepository userRepo =
+                (com.btctech.mailapp.repository.UserRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.UserRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.UserRepository.class},
+                        (proxy, method, args) -> {
+                            if ("findByEmail".equals(method.getName()) ||
+                                "findFirstByEmailIgnoreCase".equals(method.getName())) {
+                                String email = (String) args[0];
+                                if ("bob@bnxmail.com".equalsIgnoreCase(email)) return Optional.of(receiverUser);
+                                if ("alice@bnxmail.com".equalsIgnoreCase(email)) return Optional.of(senderUser);
+                            }
+                            return Optional.empty();
+                        }
+                );
+
+        AtomicReference<CasboxMessage> savedMsg = new AtomicReference<>();
+        CasboxMessageRepository repo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> {
+                    if ("save".equals(method.getName())) {
+                        CasboxMessage m = (CasboxMessage) args[0];
+                        m.setId(99L);
+                        savedMsg.set(m);
+                        return m;
+                    }
+                    return null;
+                }
+        );
+
+        CasboxService service = new CasboxService(repo, null, null, null, null, userRepo, null);
+
+        com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
+        req.setReceiverEmail("bob@bnxmail.com");
+        req.setSubject("Test");
+        req.setBody("Hello Bob");
+
+        com.btctech.mailapp.dto.CasboxMessageDto result = service.sendMessage("alice@bnxmail.com", req);
+
+        assertNotNull(result);
+        assertEquals("bob@bnxmail.com", result.getReceiverEmail());
+        assertEquals("alice@bnxmail.com", result.getSenderEmail());
+        assertEquals("Hello Bob", result.getBody());
+        assertEquals("SENT", result.getStatus());
+        assertNotNull(savedMsg.get());
+        assertEquals("bob@bnxmail.com", savedMsg.get().getReceiverEmail());
+    }
+
+    @Test
+    @DisplayName("isValidRecipient validates email format and user existence correctly")
+    void testIsValidRecipient() {
+        com.btctech.mailapp.entity.User existingUser = new com.btctech.mailapp.entity.User();
+        existingUser.setId(10L);
+        existingUser.setUsername("bob");
+        existingUser.setEmail("bob@bnxmail.com");
+
+        com.btctech.mailapp.repository.UserRepository userRepo =
+                (com.btctech.mailapp.repository.UserRepository) Proxy.newProxyInstance(
+                        com.btctech.mailapp.repository.UserRepository.class.getClassLoader(),
+                        new Class<?>[]{com.btctech.mailapp.repository.UserRepository.class},
+                        (proxy, method, args) -> {
+                            if ("findByEmail".equals(method.getName()) ||
+                                "findFirstByEmailIgnoreCase".equals(method.getName())) {
+                                String email = (String) args[0];
+                                if ("bob@bnxmail.com".equalsIgnoreCase(email)) return Optional.of(existingUser);
+                            }
+                            return Optional.empty();
+                        }
+                );
+
+        CasboxService service = new CasboxService(null, null, null, null, null, userRepo, null);
+
+        assertTrue(service.isValidRecipient("bob@bnxmail.com"));
+        assertFalse(service.isValidRecipient("dilliprasath12233456778@bnxmail.com"));
+        assertFalse(service.isValidRecipient("not-an-email"));
+        assertFalse(service.isValidRecipient(""));
+        assertFalse(service.isValidRecipient(null));
+    }
 }

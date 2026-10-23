@@ -17,7 +17,9 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class CasboxControllerTest {
@@ -51,6 +53,15 @@ class CasboxControllerTest {
             dto.setBody(request != null ? request.getCleanBody() : "");
             dto.setIsEdited(true);
             return dto;
+        }
+
+        public boolean validRecipientResult = true;
+        public String lastValidatedEmail;
+
+        @Override
+        public boolean isValidRecipient(String identifier) {
+            this.lastValidatedEmail = identifier;
+            return validRecipientResult;
         }
 
         @Override
@@ -148,5 +159,45 @@ class CasboxControllerTest {
         assertEquals(456L, fakeCasboxService.lastEditMessageId);
         assertEquals("Updated message content", fakeCasboxService.lastEditRequest.getCleanBody());
         assertEquals(currentUser, fakeCasboxService.lastUserEmail);
+    }
+
+    @Test
+    @DisplayName("GET /api/casbox/validate-recipient should return 200 when recipient exists")
+    void testValidateRecipientExisting() throws Exception {
+        fakeCasboxService.validRecipientResult = true;
+        mockMvc.perform(get("/api/casbox/validate-recipient")
+                .param("email", "existing@bnxmail.com")
+                .principal(new UsernamePasswordAuthenticationToken(currentUser, "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.email").value("existing@bnxmail.com"));
+
+        assertEquals("existing@bnxmail.com", fakeCasboxService.lastValidatedEmail);
+    }
+
+    @Test
+    @DisplayName("GET /api/casbox/validate-recipient should return 200 with valid:false when recipient does not exist")
+    void testValidateRecipientNonExistent() throws Exception {
+        fakeCasboxService.validRecipientResult = false;
+        mockMvc.perform(get("/api/casbox/validate-recipient")
+                .param("email", "nonexistent@bnxmail.com")
+                .principal(new UsernamePasswordAuthenticationToken(currentUser, "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.message").value("Invalid email ID. This BNXmail account does not exist."));
+
+        assertEquals("nonexistent@bnxmail.com", fakeCasboxService.lastValidatedEmail);
+    }
+
+    @Test
+    @DisplayName("GET /api/casbox/validate-recipient should return 200 with valid:false when email param is blank")
+    void testValidateRecipientBlank() throws Exception {
+        fakeCasboxService.validRecipientResult = false;
+        mockMvc.perform(get("/api/casbox/validate-recipient")
+                .param("email", "   ")
+                .principal(new UsernamePasswordAuthenticationToken(currentUser, "password")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.message").value("Invalid email ID. This BNXmail account does not exist."));
     }
 }

@@ -86,6 +86,10 @@ public class CasboxService {
 
         String rawReceiver = request.getReceiverEmail().trim();
 
+        if (!isValidEmail(rawReceiver)) {
+            throw new com.btctech.mailapp.exception.MailException("Invalid recipient email address.");
+        }
+
         if (blockedContactService != null) {
             // Check if recipient has blocked sender
             if (blockedContactService.isSenderBlocked(rawReceiver, senderEmail)) {
@@ -99,6 +103,13 @@ public class CasboxService {
 
         User sender = connectionService != null ? connectionService.resolveUser(senderEmail) : resolveUser(senderEmail);
         User receiver = connectionService != null ? connectionService.resolveUser(rawReceiver) : resolveUser(rawReceiver);
+        if (receiver == null) {
+            receiver = resolveUser(rawReceiver);
+        }
+
+        if (receiver == null) {
+            throw new com.btctech.mailapp.exception.MailException("Invalid recipient email address. This BNXmail account does not exist.");
+        }
 
         if (connectionService != null && sender != null && receiver != null) {
             if (!connectionService.isConnectionActive(sender.getId(), receiver.getId())) {
@@ -471,25 +482,62 @@ public class CasboxService {
         return false;
     }
 
+    public static boolean isValidEmail(String email) {
+        if (email == null) return false;
+        String clean = email.trim();
+        if (clean.isEmpty() || clean.length() > 254) return false;
+        if (clean.contains("..") || clean.contains(" ")) return false;
+        return clean.matches("^[A-Za-z0-9+_.-]+@([A-Za-z0-9-]+\\.)+[A-Za-z]{2,}$");
+    }
+
+    @Transactional(readOnly = true)
+    public boolean isValidRecipient(String email) {
+        if (email == null || email.trim().isEmpty()) {
+            return false;
+        }
+        String clean = email.trim();
+        if (!isValidEmail(clean)) {
+            return false;
+        }
+        User user = resolveUser(clean);
+        return user != null;
+    }
+
     private User resolveUser(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) return null;
+        String clean = identifier.trim().toLowerCase();
+
         if (connectionService != null) {
             try {
-                User u = connectionService.resolveUser(identifier);
+                User u = connectionService.resolveUser(clean);
+                if (u != null) return u;
+            } catch (Exception ignored) {}
+        }
+        if (userService != null) {
+            try {
+                User u = userService.getUserByEmailOrUsername(clean);
                 if (u != null) return u;
             } catch (Exception ignored) {}
         }
         if (userRepository != null) {
             try {
-                String clean = identifier.trim().toLowerCase();
                 Optional<User> byEmail = userRepository.findByEmail(clean);
                 if (byEmail.isPresent()) return byEmail.get();
+                Optional<User> byDirect = userRepository.findFirstByEmailIgnoreCase(clean);
+                if (byDirect.isPresent()) return byDirect.get();
                 Optional<User> byUser = userRepository.findByUsername(clean);
                 if (byUser.isPresent()) return byUser.get();
                 if (clean.contains("@")) {
                     String local = clean.substring(0, clean.indexOf("@"));
                     Optional<User> byLocal = userRepository.findByUsername(local);
-                    if (byLocal.isPresent()) return byLocal.get();
+                    if (byLocal.isPresent()) {
+                        User u = byLocal.get();
+                        String uEmail = u.getEmail();
+                        if (clean.equalsIgnoreCase(u.getUsername() + "@bnxmail.com") ||
+                            (uEmail != null && clean.equalsIgnoreCase(uEmail.trim()))) {
+                            return u;
+                        }
+                    }
                 }
             } catch (Exception ignored) {}
         }
