@@ -222,6 +222,25 @@ public class MailReceiveService {
                 emails = deduplicateDrafts(emails);
             }
 
+            // Ensure emails are sorted chronologically descending by original date (newest first)
+            emails.sort((a, b) -> {
+                java.util.Date dateA = a.getReceivedDate() != null ? a.getReceivedDate() : a.getSentDate();
+                java.util.Date dateB = b.getReceivedDate() != null ? b.getReceivedDate() : b.getSentDate();
+                if (dateA == null && dateB == null) return 0;
+                if (dateA == null) return 1;
+                if (dateB == null) return -1;
+                int cmp = dateB.compareTo(dateA);
+                if (cmp != 0) return cmp;
+                if (a.getUid() != null && b.getUid() != null) {
+                    try {
+                        long uidA = Long.parseLong(a.getUid());
+                        long uidB = Long.parseLong(b.getUid());
+                        return Long.compare(uidB, uidA);
+                    } catch (Exception ignored) {}
+                }
+                return 0;
+            });
+
             return new FolderResult(emails, messageCount);
 
         } catch (MessagingException e) {
