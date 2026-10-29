@@ -41,4 +41,31 @@ public class SendMailRequest {
     private String uid;
 
     private Long id;
+
+    private String draftUid;
+
+    private Long draftId;
+
+    @JsonProperty("isStarred")
+    private Boolean isStarred;
+
+    @JsonProperty("isStarred")
+    public Boolean getIsStarred() {
+        return isStarred;
+    }
+
+    @JsonProperty("isStarred")
+    public void setIsStarred(Boolean isStarred) {
+        this.isStarred = isStarred;
+    }
+
+    @JsonProperty("starred")
+    public Boolean getStarred() {
+        return isStarred;
+    }
+
+    @JsonProperty("starred")
+    public void setStarred(Boolean starred) {
+        this.isStarred = starred;
+    }
 }

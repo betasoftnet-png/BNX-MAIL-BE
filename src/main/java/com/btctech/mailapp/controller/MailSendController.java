@@ -72,7 +72,9 @@ public class MailSendController {
             }
 
             // Execute send
-            mailSendService.sendMail(fromEmail, password, request);
+            String sentUid = mailSendService.sendMail(fromEmail, password, request);
+
+            boolean isStarred = Boolean.TRUE.equals(request.getIsStarred()) || Boolean.TRUE.equals(request.getStarred());
 
             // Response payload
             Map<String, Object> data = new HashMap<>();
@@ -80,8 +82,14 @@ public class MailSendController {
             data.put("to", request.getTo());
             data.put("subject", request.getSubject());
             data.put("sentAt", System.currentTimeMillis());
+            if (sentUid != null) {
+                data.put("uid", sentUid);
+                data.put("folderName", "Sent");
+            }
+            data.put("starred", isStarred);
+            data.put("isStarred", isStarred);
 
-            log.info("✓ Email sent successfully from {} to {}", fromEmail, request.getTo());
+            log.info("✓ Email sent successfully from {} to {} (sentUid={}, isStarred={})", fromEmail, request.getTo(), sentUid, isStarred);
 
             return ResponseEntity.ok(
                     ApiResponse.success(data, "Email sent successfully"));

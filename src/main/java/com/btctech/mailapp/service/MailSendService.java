@@ -4,6 +4,8 @@ import com.btctech.mailapp.dto.BulkMailRequest;
 import com.btctech.mailapp.dto.SendMailRequest;
 import com.btctech.mailapp.dto.AttachmentInfo;
 import com.btctech.mailapp.exception.MailException;
+import com.btctech.mailapp.entity.StarredEmail;
+import com.btctech.mailapp.repository.StarredEmailRepository;
 import org.springframework.scheduling.annotation.Async;
 import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.List;
 import java.util.Properties;
 
 import java.util.UUID;
@@ -27,6 +30,7 @@ import java.util.UUID;
 public class MailSendService {
     
     private final MailReceiveService mailReceiveService;
+    private final StarredEmailRepository starredEmailRepository;
 
     @Value("${mail.smtp.host:localhost}")
     private String smtpHost;
@@ -41,9 +45,22 @@ public class MailSendService {
     private int imapPort;
 
 
-    public void sendMail(String fromEmail, String password, SendMailRequest request) {
+    public String sendMail(String fromEmail, String password, SendMailRequest request) {
         
         log.info("Attempting to send email from {} to {}", fromEmail, request.getTo());
+        
+        String draftUid = (request.getDraftUid() != null && !request.getDraftUid().isEmpty())
+                ? request.getDraftUid()
+                : (request.getUid() != null && !request.getUid().isEmpty() ? request.getUid() : null);
+        boolean isStarred = Boolean.TRUE.equals(request.getIsStarred()) || Boolean.TRUE.equals(request.getStarred());
+
+        // If not explicitly passed, inspect local starred database mapping for the draft UID
+        if (!isStarred && draftUid != null && starredEmailRepository != null) {
+            List<StarredEmail> draftStars = starredEmailRepository.findByUserEmailAndUid(fromEmail, draftUid);
+            if (!draftStars.isEmpty()) {
+                isStarred = true;
+            }
+        }
         
         try {
             Properties props = new Properties();
@@ -153,12 +170,13 @@ public class MailSendService {
             
             log.info("✓ Email sent successfully from {} to {}", fromEmail, request.getTo());
             
-          
+            String sentUid = null;
             if (password != null && !password.isEmpty()) {
-                saveCopyToSent(fromEmail, password, message);
+                sentUid = saveCopyToSent(fromEmail, password, message, isStarred, draftUid);
             } else {
                 log.info("Skipping Sent folder IMAP archival (no password provided / public send)");
             }
+            return sentUid;
             
         } catch (MessagingException e) {
             log.error("Failed to send email from {} to {}: {}", fromEmail, request.getTo(), e.getMessage());
@@ -236,10 +254,11 @@ public class MailSendService {
         }
     }
 
-    private void saveCopyToSent(String email, String password, MimeMessage message) {
-        log.info("Starting archival process for sent email from {}", email);
+    private String saveCopyToSent(String email, String password, MimeMessage message, boolean isStarred, String draftUid) {
+        log.info("Starting archival process for sent email from {} (isStarred={})", email, isStarred);
         Store store = null;
         Folder sentFolder = null;
+        String sentUid = null;
 
         try {
             store = mailReceiveService.connect(email, password);
@@ -257,10 +276,46 @@ public class MailSendService {
             
             MimeMessage copy = new MimeMessage(message);
             copy.setFlag(Flags.Flag.SEEN, true);
+            if (isStarred) {
+                copy.setFlag(Flags.Flag.FLAGGED, true);
+            }
             copy.saveChanges();
             
             sentFolder.appendMessages(new Message[]{copy});
             log.info("✓ Message successfully archived to '{}' folder for {}", actualSentFolder, email);
+
+            if (sentFolder instanceof UIDFolder uidFolder) {
+                int totalCount = sentFolder.getMessageCount();
+                if (totalCount > 0) {
+                    Message lastMsg = sentFolder.getMessage(totalCount);
+                    sentUid = String.valueOf(uidFolder.getUID(lastMsg));
+                    log.info("✓ Retrieved sent message UID {} in {}", sentUid, actualSentFolder);
+                }
+            }
+
+            // Persist transferred star status in backend database
+            if (isStarred && sentUid != null && starredEmailRepository != null) {
+                List<StarredEmail> existingStars = starredEmailRepository.findByUserEmailAndUid(email, sentUid);
+                if (existingStars.isEmpty()) {
+                    StarredEmail star = StarredEmail.builder()
+                            .userEmail(email)
+                            .uid(sentUid)
+                            .folderName("Sent")
+                            .starredAt(java.time.LocalDateTime.now())
+                            .build();
+                    starredEmailRepository.save(star);
+                    log.info("✓ Transferred STAR status to sent email UID {} in Sent folder for {}", sentUid, email);
+                }
+
+                // Clean up old draft stars to prevent duplicates in Starred view
+                if (draftUid != null && !draftUid.isEmpty()) {
+                    List<StarredEmail> oldStars = starredEmailRepository.findByUserEmailAndUid(email, draftUid);
+                    if (!oldStars.isEmpty()) {
+                        starredEmailRepository.deleteAll(oldStars);
+                        log.info("✓ Cleaned up old draft STAR mapping for UID {}", draftUid);
+                    }
+                }
+            }
 
         } catch (Exception e) {
             log.warn("⚠ SENT ARCHIVAL WARNING: Failed to archive copy for {}. Reason: {}", email, e.getMessage());
@@ -272,5 +327,6 @@ public class MailSendService {
                 log.debug("Error closing IMAP resources: {}", e.getMessage());
             }
         }
+        return sentUid;
     }
 }
