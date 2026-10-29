@@ -400,14 +400,26 @@ public class MailReceiveService {
             MimeMessage message = new MimeMessage(session);
             message.setFrom(new InternetAddress(email));
 
-            if (request.getTo() != null && !request.getTo().isEmpty()) {
-                message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(request.getTo()));
+            if (request.getTo() != null && !request.getTo().trim().isEmpty()) {
+                try {
+                    message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(request.getTo().trim(), false));
+                } catch (Exception ex) {
+                    log.warn("Draft TO recipient non-standard: {}", request.getTo());
+                }
             }
-            if (request.getCc() != null && !request.getCc().isEmpty()) {
-                message.setRecipients(Message.RecipientType.CC, InternetAddress.parse(request.getCc()));
+            if (request.getCc() != null && !request.getCc().trim().isEmpty()) {
+                try {
+                    message.setRecipients(Message.RecipientType.CC, InternetAddress.parse(request.getCc().trim(), false));
+                } catch (Exception ex) {
+                    log.warn("Draft CC recipient non-standard: {}", request.getCc());
+                }
             }
-            if (request.getBcc() != null && !request.getBcc().isEmpty()) {
-                message.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(request.getBcc()));
+            if (request.getBcc() != null && !request.getBcc().trim().isEmpty()) {
+                try {
+                    message.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(request.getBcc().trim(), false));
+                } catch (Exception ex) {
+                    log.warn("Draft BCC recipient non-standard: {}", request.getBcc());
+                }
             }
 
             message.setSubject(request.getSubject() != null ? request.getSubject() : "");
@@ -646,8 +658,9 @@ public class MailReceiveService {
                     else if ("Trash".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveTrashFolderName(store);
                     else if ("Spam".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveSpamFolderName(store);
                     else if ("Archive".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveArchiveFolderName(store);
+                    else if ("Draft".equalsIgnoreCase(folderToOpen) || "Drafts".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveDraftsFolderName(store);
 
-                    String[] candidates = { folderToOpen, "INBOX", resolveSentFolderName(store), resolveArchiveFolderName(store) };
+                    String[] candidates = { folderToOpen, "INBOX", resolveSentFolderName(store), resolveDraftsFolderName(store), resolveArchiveFolderName(store) };
                     for (String candidate : candidates) {
                         if (candidate == null || candidate.toUpperCase().contains("STARRED") || candidate.toUpperCase().contains("ALL") || candidate.toUpperCase().contains("LABEL")) continue;
                         Folder f = null;

@@ -1,10 +1,12 @@
 package com.btctech.mailapp.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class SendMailRequest {
 
     @NotBlank(message = "Recipient email is required")
