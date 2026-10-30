@@ -15,6 +15,7 @@ public class CorsConfig implements WebMvcConfigurer {
                         "https://bnxmail.com",
                         "https://www.b2auth.com",
                         "https://b2auth.com",
+                        "https://z7ibjggnrtzynrguut8nerqr.151.185.41.212.sslip.io",
                         "http://localhost:3000",
                         "http://localhost:5173" // for local frontend
                 )
