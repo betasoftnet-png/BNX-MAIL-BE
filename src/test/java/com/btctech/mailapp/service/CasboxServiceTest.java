@@ -615,7 +615,7 @@ class CasboxServiceTest {
                 com.btctech.mailapp.exception.MailException.class,
                 () -> service.sendMessage("sender@bnxmail.com", req)
         );
-        assertEquals("Invalid recipient email address. This BNXmail account does not exist.", ex.getMessage());
+        assertEquals("This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox.", ex.getMessage());
     }
 
     @Test
@@ -705,8 +705,30 @@ class CasboxServiceTest {
 
         assertTrue(service.isValidRecipient("bob@bnxmail.com"));
         assertFalse(service.isValidRecipient("dilliprasath12233456778@bnxmail.com"));
+        assertFalse(service.isValidRecipient("user@gmail.com"));
+        assertFalse(service.isValidRecipient("user@yahoo.com"));
+        assertFalse(service.isValidRecipient("user@outlook.com"));
+        assertFalse(service.isValidRecipient("user@zoho.com"));
         assertFalse(service.isValidRecipient("not-an-email"));
         assertFalse(service.isValidRecipient(""));
         assertFalse(service.isValidRecipient(null));
+    }
+
+    @Test
+    @DisplayName("sendMessage throws MailException when recipient has an external email domain like Gmail, Yahoo, Outlook, Zoho")
+    void testSendMessageThrowsWhenRecipientIsExternalEmail() {
+        CasboxService service = new CasboxService(null, null, null, null, null, null, null);
+        for (String external : List.of("test@gmail.com", "test@yahoo.com", "test@outlook.com", "test@zoho.com")) {
+            com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
+            req.setReceiverEmail(external);
+            req.setSubject("Test");
+            req.setBody("Hello");
+
+            com.btctech.mailapp.exception.MailException ex = assertThrows(
+                    com.btctech.mailapp.exception.MailException.class,
+                    () -> service.sendMessage("sender@bnxmail.com", req)
+            );
+            assertEquals("This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox.", ex.getMessage());
+        }
     }
 }

@@ -184,7 +184,7 @@ class CasboxControllerTest {
                 .principal(new UsernamePasswordAuthenticationToken(currentUser, "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(false))
-                .andExpect(jsonPath("$.message").value("Invalid email ID. This BNXmail account does not exist."));
+                .andExpect(jsonPath("$.message").value("This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox."));
 
         assertEquals("nonexistent@bnxmail.com", fakeCasboxService.lastValidatedEmail);
     }
@@ -198,6 +198,6 @@ class CasboxControllerTest {
                 .principal(new UsernamePasswordAuthenticationToken(currentUser, "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(false))
-                .andExpect(jsonPath("$.message").value("Invalid email ID. This BNXmail account does not exist."));
+                .andExpect(jsonPath("$.message").value("This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox."));
     }
 }

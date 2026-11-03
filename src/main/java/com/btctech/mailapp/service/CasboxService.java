@@ -90,6 +90,10 @@ public class CasboxService {
             throw new com.btctech.mailapp.exception.MailException("Invalid recipient email address.");
         }
 
+        if (isExternalEmailAddress(rawReceiver)) {
+            throw new com.btctech.mailapp.exception.MailException("This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox.");
+        }
+
         if (blockedContactService != null) {
             // Check if recipient has blocked sender
             if (blockedContactService.isSenderBlocked(rawReceiver, senderEmail)) {
@@ -108,7 +112,7 @@ public class CasboxService {
         }
 
         if (receiver == null) {
-            throw new com.btctech.mailapp.exception.MailException("Invalid recipient email address. This BNXmail account does not exist.");
+            throw new com.btctech.mailapp.exception.MailException("This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox.");
         }
 
         if (connectionService != null && sender != null && receiver != null) {
@@ -490,12 +494,45 @@ public class CasboxService {
         return clean.matches("^[A-Za-z0-9+_.-]+@([A-Za-z0-9-]+\\.)+[A-Za-z]{2,}$");
     }
 
+    public static boolean isExternalEmailAddress(String email) {
+        if (email == null) return false;
+        String clean = email.trim().toLowerCase();
+        int atIndex = clean.lastIndexOf('@');
+        if (atIndex == -1 || atIndex == clean.length() - 1) {
+            return false;
+        }
+        String domain = clean.substring(atIndex + 1);
+        Set<String> externalDomains = Set.of(
+            "gmail.com", "googlemail.com",
+            "yahoo.com", "ymail.com", "rocketmail.com",
+            "outlook.com", "hotmail.com", "live.com", "msn.com",
+            "zoho.com", "zohomail.com",
+            "icloud.com", "me.com", "mac.com",
+            "aol.com", "aim.com",
+            "proton.me", "protonmail.com",
+            "mail.com", "gmx.com", "yandex.com"
+        );
+        if (externalDomains.contains(domain)) {
+            return true;
+        }
+        String[] externalBases = {
+            "gmail.", "googlemail.", "yahoo.", "ymail.", "outlook.", "hotmail.",
+            "zoho.", "icloud.", "aol.", "protonmail.", "proton."
+        };
+        for (String base : externalBases) {
+            if (domain.startsWith(base)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean isValidRecipient(String email) {
         if (email == null || email.trim().isEmpty()) {
             return false;
         }
         String clean = email.trim();
-        if (!isValidEmail(clean)) {
+        if (!isValidEmail(clean) || isExternalEmailAddress(clean)) {
             return false;
         }
         try {

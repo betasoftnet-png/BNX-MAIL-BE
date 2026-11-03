@@ -41,11 +41,12 @@ public class CasboxController {
             result.put("valid", valid);
             result.put("email", email);
             if (!valid) {
-                result.put("message", "Invalid email ID. This BNXmail account does not exist.");
+                result.put("message", "This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox.");
             }
             return ResponseEntity.ok(result);
         } catch (Throwable t) {
-            result.put("valid", true);
+            result.put("valid", false);
+            result.put("message", "This recipient is not a BNXmail user. You can send messages only to registered BNXmail accounts through Casbox.");
             result.put("email", email);
             return ResponseEntity.ok(result);
         }
