@@ -31,6 +31,7 @@ public class UserController {
     private final com.btctech.mailapp.repository.MailAccountRepository mailAccountRepository;
     private final JwtUtil jwtUtil;
     private final com.btctech.mailapp.repository.BusinessProfileRepository businessProfileRepository;
+    private final com.btctech.mailapp.service.RecipientSuggestionService recipientSuggestionService;
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentUser(
             @RequestHeader("Authorization") String authHeader) {
@@ -373,5 +374,25 @@ public class UserController {
         data.put("bio", updatedUser.getBio());
 
         return ResponseEntity.ok(ApiResponse.success(data, "Profile updated successfully"));
+    }
+
+    /**
+     * Recipient autocomplete endpoint
+     */
+    @GetMapping("/autocomplete-recipients")
+    public ResponseEntity<ApiResponse<List<com.btctech.mailapp.dto.RecipientSuggestionDTO>>> autocompleteRecipients(
+            @RequestParam(required = false, defaultValue = "") String query,
+            @RequestParam(required = false, defaultValue = "10") int limit,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            org.springframework.security.core.Authentication authentication) {
+        try {
+            String currentUserEmail = authentication != null ? authentication.getName() : "";
+            List<com.btctech.mailapp.dto.RecipientSuggestionDTO> suggestions =
+                    recipientSuggestionService.searchRecipients(currentUserEmail, authHeader, query, limit);
+            return ResponseEntity.ok(ApiResponse.success(suggestions, "Recipient suggestions retrieved successfully"));
+        } catch (Exception e) {
+            log.error("Error during recipient autocomplete for query '{}': {}", query, e.getMessage(), e);
+            return ResponseEntity.ok(ApiResponse.success(java.util.Collections.emptyList(), "Failed to fetch recipient suggestions"));
+        }
     }
 }

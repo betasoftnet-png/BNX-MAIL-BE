@@ -22,4 +22,7 @@ public interface MailAccountRepository extends JpaRepository<MailAccount, Long> 
     Long calculateTotalStorageUsed();
 
     List<MailAccount> findByEmailEndingWith(String domain);
+
+    @org.springframework.data.jpa.repository.Query("SELECT m FROM MailAccount m WHERE m.active = true AND (LOWER(m.email) LIKE LOWER(CONCAT('%', :query, '%')) OR LOWER(m.emailName) LIKE LOWER(CONCAT('%', :query, '%')))")
+    List<MailAccount> searchMailAccounts(@org.springframework.data.repository.query.Param("query") String query);
 }

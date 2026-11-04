@@ -22,6 +22,7 @@ public class MailReceiveController {
 
     private final MailReceiveService mailReceiveService;
     private final SessionService sessionService;
+    private final com.btctech.mailapp.service.RecipientSuggestionService recipientSuggestionService;
 
     /**
      * Get inbox emails
@@ -1212,6 +1213,28 @@ public class MailReceiveController {
         } catch (Exception e) {
             log.error("Error fetching subscriptions: {}", e.getMessage(), e);
             return ResponseEntity.status(500).body(ApiResponse.error("Failed to fetch subscriptions: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Smart recipient autocomplete endpoint
+     * Priority 1: Previously contacted users (Sent / Received emails + Casbox)
+     * Fallback: Registered BNXmail users from database
+     */
+    @GetMapping({"/recipients/autocomplete", "/autocomplete-recipients"})
+    public ResponseEntity<ApiResponse<List<com.btctech.mailapp.dto.RecipientSuggestionDTO>>> autocompleteRecipients(
+            @RequestParam(required = false, defaultValue = "") String query,
+            @RequestParam(required = false, defaultValue = "10") int limit,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            Authentication authentication) {
+        try {
+            String currentUserEmail = authentication != null ? authentication.getName() : "";
+            List<com.btctech.mailapp.dto.RecipientSuggestionDTO> suggestions =
+                    recipientSuggestionService.searchRecipients(currentUserEmail, authHeader, query, limit);
+            return ResponseEntity.ok(ApiResponse.success(suggestions, "Recipient suggestions retrieved successfully"));
+        } catch (Exception e) {
+            log.error("Error during recipient autocomplete for query '{}': {}", query, e.getMessage(), e);
+            return ResponseEntity.ok(ApiResponse.success(java.util.Collections.emptyList(), "Failed to fetch recipient suggestions"));
         }
     }
 }
