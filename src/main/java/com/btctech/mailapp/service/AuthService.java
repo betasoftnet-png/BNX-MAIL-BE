@@ -731,18 +731,33 @@ public class AuthService {
      * Get all active external application sessions for current user
      */
     public List<com.btctech.mailapp.dto.ExternalSessionResponse> getExternalSessions(User user) {
-        return externalAppSessionRepository.findActiveByUserOrderByLoggedInAtDesc(user).stream()
-                .map(session -> com.btctech.mailapp.dto.ExternalSessionResponse.builder()
-                        .id(session.getId())
-                        .appName(session.getClientApp().getAppName())
-                        .clientId(session.getClientApp().getClientId())
-                        .loggedInAt(session.getLoggedInAt())
-                        .ipAddress(session.getIpAddress())
-                        .userAgent(session.getUserAgent())
-                        .location(session.getLocation())
-                        .latitude(session.getLatitude())
-                        .longitude(session.getLongitude())
-                        .build())
+        List<com.btctech.mailapp.entity.ExternalAppSession> all = externalAppSessionRepository.findByUserOrderByLoggedInAtDesc(user);
+        java.util.Map<String, com.btctech.mailapp.entity.ExternalAppSession> latestByClient = new java.util.LinkedHashMap<>();
+        for (com.btctech.mailapp.entity.ExternalAppSession s : all) {
+            String cId = (s.getClientApp() != null && s.getClientApp().getClientId() != null)
+                    ? s.getClientApp().getClientId()
+                    : ("app_" + s.getId());
+            latestByClient.putIfAbsent(cId, s);
+        }
+
+        return latestByClient.values().stream()
+                .map(session -> {
+                    boolean isRevoked = Boolean.TRUE.equals(session.getRevoked());
+                    return com.btctech.mailapp.dto.ExternalSessionResponse.builder()
+                            .id(session.getId())
+                            .appName(session.getClientApp() != null ? session.getClientApp().getAppName() : "Unknown App")
+                            .clientId(session.getClientApp() != null ? session.getClientApp().getClientId() : null)
+                            .loggedInAt(session.getLoggedInAt())
+                            .ipAddress(session.getIpAddress())
+                            .userAgent(session.getUserAgent())
+                            .location(session.getLocation())
+                            .latitude(session.getLatitude())
+                            .longitude(session.getLongitude())
+                            .revoked(isRevoked)
+                            .revokedAt(session.getRevokedAt())
+                            .status(isRevoked ? "Revoked" : "Authorized")
+                            .build();
+                })
                 .collect(Collectors.toList());
     }
 
@@ -759,6 +774,20 @@ public class AuthService {
         session.setRevoked(true);
         session.setRevokedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Kolkata")));
         externalAppSessionRepository.save(session);
+
+        // Invalidate other active sessions for this client for this user to guarantee full revocation
+        if (session.getClientApp() != null && session.getClientApp().getClientId() != null) {
+            List<com.btctech.mailapp.entity.ExternalAppSession> activeOthers =
+                    externalAppSessionRepository.findActiveByUserAndClientId(user, session.getClientApp().getClientId());
+            for (com.btctech.mailapp.entity.ExternalAppSession other : activeOthers) {
+                if (!other.getId().equals(session.getId())) {
+                    other.setRevoked(true);
+                    other.setRevokedAt(LocalDateTime.now(java.time.ZoneId.of("Asia/Kolkata")));
+                    externalAppSessionRepository.save(other);
+                }
+            }
+        }
+
         log.info("✓ External session {} ({}) marked revoked for user {}", sessionId, session.getClientApp().getAppName(), user.getUsername());
 
         broadcastSessionRevocation(session, user);

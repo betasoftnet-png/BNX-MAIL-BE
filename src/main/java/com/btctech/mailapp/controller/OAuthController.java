@@ -230,6 +230,19 @@ public class OAuthController {
             @RequestHeader("Authorization") String authHeader) {
 
         String token = authHeader.substring(7);
+        try {
+            var claims = jwtUtil.extractAllClaims(token);
+            Object sessionIdObj = claims.get("session_id");
+            if (sessionIdObj != null) {
+                Long sessionId = Long.valueOf(sessionIdObj.toString());
+                var sessionOpt = externalAppSessionRepository.findById(sessionId);
+                if (sessionOpt.isEmpty() || Boolean.TRUE.equals(sessionOpt.get().getRevoked())) {
+                    log.warn("OAuth session {} is marked revoked or removed on /userinfo", sessionId);
+                    return ResponseEntity.status(401).body(ApiResponse.error("Your session has been revoked. Please log in again."));
+                }
+            }
+        } catch (Exception ignored) {}
+
         String email = jwtUtil.extractEmail(token);
         var user = userService.getUserByEmailOrUsername(email);
         if (user == null) {

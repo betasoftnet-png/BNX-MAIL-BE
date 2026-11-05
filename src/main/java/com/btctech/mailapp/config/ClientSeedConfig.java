@@ -97,7 +97,7 @@ public class ClientSeedConfig {
             clientAppRepository.findByClientId("bit-tool").ifPresentOrElse(
                 client -> {
                     log.info("Updating bit-tool OAuth client redirect URI...");
-                    client.setRedirectUri("https://www.bit-tool.com/auth,https://bit-tool.com/auth,http://localhost:5173/auth,http://localhost:5173/auth/");
+                    client.setRedirectUri("https://www.bit-tool.com/auth,https://bit-tool.com/auth,https://www.bit-tool.com,https://bit-tool.com,http://localhost:5173/auth,http://localhost:5173/auth/,http://localhost:5173,http://localhost:5173/,http://localhost:3000,http://localhost:3000/");
                     clientAppRepository.save(client);
                 },
                 () -> {
@@ -106,7 +106,7 @@ public class ClientSeedConfig {
                             .clientId("bit-tool")
                             .clientSecret("secure-bit-tool-secret-2026")
                             .appName("Bit Tool")
-                            .redirectUri("https://www.bit-tool.com/auth,https://bit-tool.com/auth,http://localhost:5173/auth,http://localhost:5173/auth/")
+                            .redirectUri("https://www.bit-tool.com/auth,https://bit-tool.com/auth,https://www.bit-tool.com,https://bit-tool.com,http://localhost:5173/auth,http://localhost:5173/auth/,http://localhost:5173,http://localhost:5173/,http://localhost:3000,http://localhost:3000/")
                             .build();
                     clientAppRepository.save(client);
                     log.info("Test OAuth client seeded: bit-tool");

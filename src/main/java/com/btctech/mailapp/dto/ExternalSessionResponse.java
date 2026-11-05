@@ -16,4 +16,7 @@ public class ExternalSessionResponse {
     private String location;
     private String latitude;
     private String longitude;
+    private Boolean revoked;
+    private LocalDateTime revokedAt;
+    private String status;
 }
