@@ -105,6 +105,12 @@ public class UserSettings {
     @Column(name = "text_color")
     private String textColor = "#000000";
 
+    @Column(name = "sidebar_preferences", columnDefinition = "TEXT")
+    private String sidebarPreferences;
+
+    @Column(name = "custom_label_preferences", columnDefinition = "TEXT")
+    private String customLabelPreferences;
+
     // Casbox Settings
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_casbox_accepted", joinColumns = @JoinColumn(name = "user_settings_id"))

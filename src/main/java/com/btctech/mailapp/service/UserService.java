@@ -135,6 +135,8 @@ public class UserService {
         if (newSettings.getFontFamily() != null) existing.setFontFamily(newSettings.getFontFamily());
         if (newSettings.getTextStyleFontSize() != null) existing.setTextStyleFontSize(newSettings.getTextStyleFontSize());
         if (newSettings.getTextColor() != null) existing.setTextColor(newSettings.getTextColor());
+        if (newSettings.getSidebarPreferences() != null) existing.setSidebarPreferences(newSettings.getSidebarPreferences());
+        if (newSettings.getCustomLabelPreferences() != null) existing.setCustomLabelPreferences(newSettings.getCustomLabelPreferences());
         if (newSettings.getCasboxAccepted() != null) {
             if (existing.getCasboxAccepted() == null) {
                 existing.setCasboxAccepted(new java.util.ArrayList<>());

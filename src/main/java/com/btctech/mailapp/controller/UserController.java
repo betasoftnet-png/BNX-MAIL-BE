@@ -191,6 +191,8 @@ public class UserController {
                 .fontFamily(settings.getFontFamily())
                 .textStyleFontSize(settings.getTextStyleFontSize())
                 .textColor(settings.getTextColor())
+                .sidebarPreferences(settings.getSidebarPreferences())
+                .customLabelPreferences(settings.getCustomLabelPreferences())
                 .casboxAccepted(settings.getCasboxAccepted())
                 .build();
                 
@@ -236,6 +238,8 @@ public class UserController {
                 .fontFamily(settingsUpdate.getFontFamily())
                 .textStyleFontSize(settingsUpdate.getTextStyleFontSize())
                 .textColor(settingsUpdate.getTextColor())
+                .sidebarPreferences(settingsUpdate.getSidebarPreferences())
+                .customLabelPreferences(settingsUpdate.getCustomLabelPreferences())
                 .casboxAccepted(settingsUpdate.getCasboxAccepted())
                 .build();
                 
@@ -277,6 +281,8 @@ public class UserController {
                 .fontFamily(saved.getFontFamily())
                 .textStyleFontSize(saved.getTextStyleFontSize())
                 .textColor(saved.getTextColor())
+                .sidebarPreferences(saved.getSidebarPreferences())
+                .customLabelPreferences(saved.getCustomLabelPreferences())
                 .casboxAccepted(saved.getCasboxAccepted())
                 .build();
                 

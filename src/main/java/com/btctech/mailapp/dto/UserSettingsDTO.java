@@ -54,5 +54,8 @@ public class UserSettingsDTO {
     private String textStyleFontSize;
     private String textColor;
 
+    private String sidebarPreferences;
+    private String customLabelPreferences;
+
     private List<String> casboxAccepted;
 }
