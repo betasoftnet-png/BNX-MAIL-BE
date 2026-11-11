@@ -86,7 +86,20 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 // Ignore if chats table or creator_id is not yet initialized
             }
 
-            log.info("Database tables contact_aliases, connections, processed_emails, and chat_admins are verified and ready.");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS system_label_settings (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    label_name VARCHAR(100) NOT NULL,
+                    show_in_label_list BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_system_label_user_name (user_id, label_name),
+                    INDEX idx_sys_label_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, and system_label_settings are verified and ready.");
         } catch (Exception e) {
             log.error("Could not automatically create/verify tables: {}", e.getMessage());
         }

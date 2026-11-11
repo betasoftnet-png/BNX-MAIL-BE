@@ -59,6 +59,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/casbox/**").authenticated()
                         .requestMatchers("/api/contact-aliases/**").authenticated()
                         .requestMatchers("/api/connections/**").authenticated()
+                        .requestMatchers("/api/labels/**").authenticated()
 
                         // Any other request requires authentication
                         .anyRequest().authenticated())

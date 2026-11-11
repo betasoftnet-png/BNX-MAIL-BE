@@ -380,6 +380,21 @@ CREATE TABLE IF NOT EXISTS processed_emails (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==========================================
+-- TABLE: SYSTEM_LABEL_SETTINGS (Per-user visibility in "Label as..." dropdown)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS system_label_settings (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    label_name VARCHAR(100) NOT NULL,
+    show_in_label_list BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_system_label_user_name (user_id, label_name),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_sys_label_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==========================================
 -- SAMPLE DATA
 -- ==========================================
 INSERT IGNORE INTO users (username, email, password, first_name, last_name, role) 
