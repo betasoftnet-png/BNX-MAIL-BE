@@ -103,7 +103,11 @@ public class SecurityConfig {
             "https://www.bit-tool.com",
             "https://www.bit-tool.com/",
             "https://storage.beta-softnet.com",
-            "https://z7ibjggnrtzynrguut8nerqr.151.185.41.212.sslip.io"
+            "https://z7ibjggnrtzynrguut8nerqr.151.185.41.212.sslip.io",
+            "http://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
+            "https://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
+            "http://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+            "https://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io"
         ));
 
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
