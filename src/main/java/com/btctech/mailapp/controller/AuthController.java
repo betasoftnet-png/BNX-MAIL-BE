@@ -34,6 +34,7 @@ public class AuthController {
     private final com.btctech.mailapp.service.TwoFactorService twoFactorService;
     private final SystemSettingRepository systemSettingRepository;
     private final com.btctech.mailapp.repository.BusinessProfileRepository businessProfileRepository;
+    private final com.btctech.mailapp.repository.UserRepository userRepository;
 
     /**
      * STEP 1: Register user (username + password)
@@ -293,10 +294,12 @@ public class AuthController {
             Map<String, Object> claims = new HashMap<>();
             try {
                 claims.put("ep", sessionService.encrypt(request.getPassword()));
+                claims.put("purpose", "2fa_challenge");
             } catch (Exception e) {
                 log.error("Failed to encrypt password for 2FA token: {}", e.getMessage());
                 return ResponseEntity.internalServerError().body(ApiResponse.error("Internal server error during login"));
             }
+            // Generate temporary restricted challenge token
             String tempToken = jwtUtil.generateTokenWithClaims(claims, "2fa_" + request.getEmail());
             
             Map<String, Object> challengeData = new HashMap<>();
@@ -335,16 +338,52 @@ public class AuthController {
     }
 
     /**
-     * Final STEP: Verify 2FA code and complete login
+     * Final STEP: Verify 2FA code (or single-use recovery code) and complete login
      */
     @PostMapping("/login/2fa")
     public ResponseEntity<?> verifyLogin2fa(@RequestBody Map<String, String> body, jakarta.servlet.http.HttpServletRequest httpRequest) {
         String tempToken = body.get("tempToken");
         String code = body.get("code");
-        String subject = jwtUtil.extractEmail(tempToken);
+        if (tempToken == null || code == null || code.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Temporary token and verification code are required"));
+        }
+
+        String subject = null;
+        try {
+            subject = jwtUtil.extractEmail(tempToken);
+        } catch (Exception e) {
+            return ResponseEntity.status(401).body(ApiResponse.error("Invalid or expired 2FA session"));
+        }
+
+        if (subject == null || !subject.startsWith("2fa_")) {
+            return ResponseEntity.status(401).body(ApiResponse.error("Invalid 2FA challenge token"));
+        }
+
         String email = subject.replace("2fa_", "");
         User user = userService.getUserByEmailOrUsername(email);
-        if (twoFactorService.verifyCode(user.getTwoFactorSecret(), code)) {
+        if (user == null) {
+            return ResponseEntity.status(404).body(ApiResponse.error("User not found"));
+        }
+
+        // Verify either 6-digit TOTP code or single-use recovery code
+        boolean verified = false;
+        String trimmedCode = code.trim();
+        try {
+            if (trimmedCode.length() == 6 && trimmedCode.chars().allMatch(Character::isDigit)) {
+                verified = twoFactorService.verifyCode(user, trimmedCode);
+            }
+            if (!verified) {
+                // Check if it is a single-use recovery code (XXXX-XXXX or 8 characters)
+                verified = twoFactorService.verifyAndConsumeRecoveryCode(user, trimmedCode);
+            }
+        } catch (RuntimeException re) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(re.getMessage()));
+        }
+
+        if (verified) {
+            // Save updated user (e.g. lastTotpStep updated for replay protection)
+            userRepository.save(user);
+
             // Generate real tokens
             String ipAddress = httpRequest.getHeader("X-Forwarded-For");
             if (ipAddress == null || ipAddress.isEmpty()) {
@@ -365,8 +404,9 @@ public class AuthController {
                     String password = sessionService.decrypt(encryptedPassword);
                     // Get primary mail account for session
                     MailAccount mailAccount = mailboxService.getMailAccountByEmail(email);
-                    // Create session (store password linked to accessToken)
-                    sessionService.createSession(user.getId(), mailAccount.getId(), password, accessToken);
+                    if (mailAccount != null) {
+                        sessionService.createSession(user.getId(), mailAccount.getId(), password, accessToken);
+                    }
                 }
             } catch (Exception e) {
                 log.error("Failed to recover password from 2FA token: {}", e.getMessage());
@@ -375,7 +415,7 @@ public class AuthController {
             com.btctech.mailapp.dto.LoginResponseData data = authService.buildLoginResponse(user, false, accessToken, refreshToken);
             return ResponseEntity.ok(ApiResponse.success(data, "Login successful"));
         } else {
-            return ResponseEntity.badRequest().body(ApiResponse.error("Invalid 2FA code"));
+            return ResponseEntity.badRequest().body(ApiResponse.error("Invalid 2FA code or recovery code"));
         }
     }
 

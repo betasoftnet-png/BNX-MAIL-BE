@@ -96,8 +96,13 @@ public class User {
     @Column(name = "two_factor_enabled")
     private Boolean twoFactorEnabled = false;
 
-    @Column(name = "two_factor_secret")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "two_factor_secret", length = 500)
     private String twoFactorSecret;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "last_totp_step")
+    private Long lastTotpStep;
 
     @Lob
     @Column(name = "profile_picture", columnDefinition = "LONGTEXT")

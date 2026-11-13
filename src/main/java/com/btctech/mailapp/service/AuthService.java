@@ -721,6 +721,8 @@ public class AuthService {
             throw new MailException("OTP has expired");
         }
         
+        // Delete token immediately to ensure single-use and prevent replay
+        passwordResetTokenRepository.delete(token);
         log.info("✓ OTP verified successfully for: {}", identifier);
     }
 

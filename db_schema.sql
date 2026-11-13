@@ -305,7 +305,21 @@ CREATE TABLE IF NOT EXISTS authenticator_accounts (
 
 -- Add 2FA columns to users if not exists
 ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(255) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_secret VARCHAR(500) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_totp_step BIGINT NULL;
+
+-- TABLE: USER_RECOVERY_CODES (Single-use hashed 2FA recovery codes)
+CREATE TABLE IF NOT EXISTS user_recovery_codes (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    code_hash VARCHAR(128) NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE,
+    used_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_rec_user (user_id),
+    INDEX idx_rec_user_used (user_id, used),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==========================================
 -- TABLE: CASBOX_MESSAGES (Internal chat & messaging)

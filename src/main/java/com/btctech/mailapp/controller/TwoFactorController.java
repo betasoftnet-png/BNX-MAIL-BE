@@ -1,20 +1,28 @@
 package com.btctech.mailapp.controller;
 
+import com.btctech.mailapp.dto.ApiResponse;
 import com.btctech.mailapp.entity.AuthenticatorAccount;
 import com.btctech.mailapp.entity.User;
+import com.btctech.mailapp.entity.UserSettings;
 import com.btctech.mailapp.repository.AuthenticatorAccountRepository;
 import com.btctech.mailapp.repository.UserRepository;
+import com.btctech.mailapp.repository.UserSettingsRepository;
 import com.btctech.mailapp.service.TwoFactorService;
+import com.btctech.mailapp.service.UserService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import org.springframework.transaction.annotation.Transactional;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Transactional
 @RestController
 @RequestMapping("/api/users/2fa")
@@ -27,100 +35,230 @@ public class TwoFactorController {
     private UserRepository userRepository;
 
     @Autowired
+    private UserSettingsRepository userSettingsRepository;
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
     private AuthenticatorAccountRepository authenticatorAccountRepository;
 
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    /**
+     * Step 1: Initiate 2FA setup.
+     * Generates a new TOTP secret, encrypts it at rest in user entity (2FA not enabled yet),
+     * and returns the base64 PNG data URI QR code + plain secret for display.
+     */
     @PostMapping("/setup")
     public ResponseEntity<?> initiateSetup(@AuthenticationPrincipal String principal) {
         if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
         User user = userRepository.findByUsername(principal)
                 .or(() -> userRepository.findByEmail(principal))
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        String secret = twoFactorService.generateSecret();
+        String rawSecret = twoFactorService.generateSecret();
         String label = (user.getEmail() != null && !user.getEmail().trim().isEmpty()) ? user.getEmail() : user.getUsername();
-        String qrCodeUrl = twoFactorService.getQrCodeUrl(secret, label);
+        String qrCodeUrl = twoFactorService.getQrCodeUrl(rawSecret, label);
+        String otpauthUri = twoFactorService.getOtpauthUri(rawSecret, label);
 
-        // We don't save yet, just return to frontend for verification
-        Map<String, String> response = new HashMap<>();
-        response.put("secret", secret);
-        response.put("qrCodeUrl", qrCodeUrl);
-
-        // Store secret temporarily in the user entity (or a cache)
-        user.setTwoFactorSecret(secret);
+        // Encrypt secret at rest using AES-GCM before persisting
+        String encryptedSecret = twoFactorService.encryptSecret(rawSecret);
+        user.setTwoFactorSecret(encryptedSecret);
+        // Note: twoFactorEnabled remains FALSE until verified with a valid code
+        user.setLastTotpStep(null);
         userRepository.save(user);
 
-        Map<String, Object> finalResponse = new HashMap<>();
-        finalResponse.put("success", true);
-        finalResponse.put("data", response);
-        
-        return ResponseEntity.ok(finalResponse);
+        Map<String, Object> data = new HashMap<>();
+        data.put("secret", rawSecret);
+        data.put("qrCodeUrl", qrCodeUrl);
+        data.put("otpauthUri", otpauthUri);
+
+        return ResponseEntity.ok(ApiResponse.success(data, "2FA setup initiated"));
     }
 
+    /**
+     * Step 2: Verify initial OTP and enable 2FA.
+     * Generates 10 single-use recovery codes upon successful verification.
+     */
     @PostMapping("/verify")
     public ResponseEntity<?> verifyAndEnable(@AuthenticationPrincipal String principal, @RequestBody Map<String, String> body) {
-        String code = body.get("code");
         if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
+        }
+        String code = body != null ? body.get("code") : null;
+        if (code == null || code.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Verification code is required"));
+        }
+
+        User user = userRepository.findByUsername(principal)
+                .or(() -> userRepository.findByEmail(principal))
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (user.getTwoFactorSecret() == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("No pending 2FA setup found. Please initiate setup first."));
+        }
+
+        try {
+            if (twoFactorService.verifyCode(user, code)) {
+                // Authoritatively enable 2FA on User entity
+                user.setTwoFactorEnabled(true);
+                userRepository.save(user);
+
+                // Synchronize UserSettings table to prevent desync
+                UserSettings settings = userSettingsRepository.findByUser(user)
+                        .orElseGet(() -> UserSettings.builder().user(user).build());
+                settings.setTwoFactorEnabled(true);
+                userSettingsRepository.save(settings);
+
+                // Sync to authenticator accounts for BNX Auth
+                String accountName = "BNX Auth (" + user.getEmail() + ")";
+                authenticatorAccountRepository.deleteByUserIdAndAccountName(user.getId(), accountName);
+
+                AuthenticatorAccount acc = new AuthenticatorAccount();
+                acc.setUser(user);
+                acc.setAccountName(accountName);
+                acc.setSecretKey(user.getTwoFactorSecret());
+                authenticatorAccountRepository.save(acc);
+
+                // Generate 10 single-use recovery codes
+                List<String> recoveryCodes = twoFactorService.generateRecoveryCodes(user, 10);
+
+                Map<String, Object> data = new HashMap<>();
+                data.put("recoveryCodes", recoveryCodes);
+                data.put("twoFactorEnabled", true);
+
+                log.info("✓ 2FA successfully verified and enabled for user: {}", user.getUsername());
+                return ResponseEntity.ok(ApiResponse.success(data, "2FA enabled successfully"));
+            } else {
+                return ResponseEntity.badRequest().body(ApiResponse.error("Invalid verification code. Please try again."));
+            }
+        } catch (RuntimeException re) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(re.getMessage()));
+        }
+    }
+
+    /**
+     * Disable 2FA.
+     * Requires re-authentication (account password or valid OTP/recovery code).
+     */
+    @PostMapping("/disable")
+    public ResponseEntity<?> disable2FA(@AuthenticationPrincipal String principal, @RequestBody(required = false) Map<String, String> body) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
         User user = userRepository.findByUsername(principal)
                 .or(() -> userRepository.findByEmail(principal))
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        if (twoFactorService.verifyCode(user.getTwoFactorSecret(), code)) {
-            user.setTwoFactorEnabled(true);
-            userRepository.save(user);
+        // Re-authentication check
+        String password = body != null ? body.get("password") : null;
+        String code = body != null ? body.get("code") : null;
+        boolean authenticated = false;
 
-            // Also add this to their synced authenticator accounts
-            AuthenticatorAccount acc = new AuthenticatorAccount();
-            acc.setUser(user);
-            acc.setAccountName("BNX Auth (" + user.getEmail() + ")");
-            acc.setSecretKey(user.getTwoFactorSecret());
-            authenticatorAccountRepository.save(acc);
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", true);
-            response.put("message", "2FA enabled successfully");
-            return ResponseEntity.ok(response);
-        } else {
-            Map<String, Object> response = new HashMap<>();
-            response.put("success", false);
-            response.put("message", "Invalid code");
-            return ResponseEntity.badRequest().body(response);
+        if (password != null && !password.trim().isEmpty()) {
+            authenticated = passwordEncoder.matches(password.trim(), user.getPassword());
+        } else if (code != null && !code.trim().isEmpty()) {
+            try {
+                authenticated = twoFactorService.verifyCode(user, code.trim())
+                        || twoFactorService.verifyAndConsumeRecoveryCode(user, code.trim());
+            } catch (Exception ignored) {}
         }
+
+        if (!authenticated) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Invalid password or verification code"));
+        }
+
+        // Authoritatively disable 2FA on User entity
+        user.setTwoFactorEnabled(false);
+        user.setTwoFactorSecret(null);
+        user.setLastTotpStep(null);
+        userRepository.save(user);
+
+        // Synchronize UserSettings table
+        UserSettings settings = userSettingsRepository.findByUser(user).orElse(null);
+        if (settings != null) {
+            settings.setTwoFactorEnabled(false);
+            userSettingsRepository.save(settings);
+        }
+
+        // Invalidate all recovery codes
+        twoFactorService.invalidateAllRecoveryCodes(user);
+
+        // Remove synced authenticator account
+        String accountName = "BNX Auth (" + user.getEmail() + ")";
+        authenticatorAccountRepository.deleteByUserIdAndAccountName(user.getId(), accountName);
+
+        log.info("✓ 2FA disabled for user: {}", user.getUsername());
+        return ResponseEntity.ok(ApiResponse.success(null, "2FA disabled successfully"));
     }
 
+    @PostMapping("/enable")
+    public ResponseEntity<?> enable2FA(@AuthenticationPrincipal String principal) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
+        }
+        User user = userRepository.findByUsername(principal)
+                .or(() -> userRepository.findByEmail(principal))
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (user.getTwoFactorSecret() == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("No 2FA setup found. Please set up 2FA first."));
+        }
+
+        user.setTwoFactorEnabled(true);
+        userRepository.save(user);
+
+        UserSettings settings = userSettingsRepository.findByUser(user).orElse(null);
+        if (settings != null) {
+            settings.setTwoFactorEnabled(true);
+            userSettingsRepository.save(settings);
+        }
+
+        return ResponseEntity.ok(ApiResponse.success(null, "2FA enabled successfully"));
+    }
+
+    /**
+     * Get authenticator accounts with masked/sanitized secrets
+     */
     @GetMapping("/accounts")
     public ResponseEntity<?> getAuthenticatorAccounts(@AuthenticationPrincipal String principal) {
         if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
         User user = userRepository.findByUsername(principal)
                 .or(() -> userRepository.findByEmail(principal))
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        List<AuthenticatorAccount> accounts = new java.util.ArrayList<>(authenticatorAccountRepository.findByUser(user));
-        
-        // Filter out BNX Auth account if 2FA is disabled for current user
-        if (!Boolean.TRUE.equals(user.getTwoFactorEnabled())) {
-            String bnxAuthName = "BNX Auth (" + user.getEmail() + ")";
-            accounts.removeIf(acc -> bnxAuthName.equals(acc.getAccountName()));
+        List<AuthenticatorAccount> accounts = authenticatorAccountRepository.findByUser(user);
+        String bnxAuthName = "BNX Auth (" + user.getEmail() + ")";
+
+        List<Map<String, Object>> safeAccounts = new ArrayList<>();
+        for (AuthenticatorAccount acc : accounts) {
+            if (!Boolean.TRUE.equals(user.getTwoFactorEnabled()) && bnxAuthName.equals(acc.getAccountName())) {
+                continue;
+            }
+            Map<String, Object> map = new HashMap<>();
+            map.put("id", acc.getId());
+            map.put("accountName", acc.getAccountName());
+            map.put("createdAt", acc.getCreatedAt());
+            // Note: secretKey is deliberately NOT returned to prevent secret exposure
+            safeAccounts.add(map);
         }
-        
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("data", accounts);
-        return ResponseEntity.ok(response);
+
+        return ResponseEntity.ok(ApiResponse.success(safeAccounts, "Authenticator accounts retrieved"));
     }
 
     @PostMapping("/accounts")
     public ResponseEntity<?> addAuthenticatorAccount(@AuthenticationPrincipal String principal, @RequestBody Map<String, String> body) {
         String name = body.get("name");
         String secret = body.get("secret");
-        
+
         if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
         User user = userRepository.findByUsername(principal)
                 .or(() -> userRepository.findByEmail(principal))
@@ -129,58 +267,16 @@ public class TwoFactorController {
         AuthenticatorAccount acc = new AuthenticatorAccount();
         acc.setUser(user);
         acc.setAccountName(name);
-        acc.setSecretKey(secret);
+        acc.setSecretKey(twoFactorService.encryptSecret(secret));
         authenticatorAccountRepository.save(acc);
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        return ResponseEntity.ok(response);
-    }
-    
-    @PostMapping("/disable")
-    public ResponseEntity<?> disable2FA(@AuthenticationPrincipal String principal) {
-        if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
-        }
-        User user = userRepository.findByUsername(principal)
-                .or(() -> userRepository.findByEmail(principal))
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        user.setTwoFactorEnabled(false);
-        userRepository.save(user);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("message", "2FA disabled successfully");
-        return ResponseEntity.ok(response);
-    }
-
-    @PostMapping("/enable")
-    public ResponseEntity<?> enable2FA(@AuthenticationPrincipal String principal) {
-        if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
-        }
-        User user = userRepository.findByUsername(principal)
-                .or(() -> userRepository.findByEmail(principal))
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        if (user.getTwoFactorSecret() == null) {
-            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "No 2FA setup found"));
-        }
-
-        user.setTwoFactorEnabled(true);
-        userRepository.save(user);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        response.put("message", "2FA enabled successfully");
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(ApiResponse.success(null, "Account added successfully"));
     }
 
     @DeleteMapping("/accounts/{id}")
     public ResponseEntity<?> deleteAuthenticatorAccount(@AuthenticationPrincipal String principal, @PathVariable Long id) {
         if (principal == null) {
-            return ResponseEntity.status(401).body(Map.of("success", false, "message", "Unauthorized"));
+            return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
         User user = userRepository.findByUsername(principal)
                 .or(() -> userRepository.findByEmail(principal))
@@ -190,13 +286,10 @@ public class TwoFactorController {
                 .orElseThrow(() -> new RuntimeException("Account not found"));
 
         if (!acc.getUser().getId().equals(user.getId())) {
-            return ResponseEntity.status(403).body(Map.of("success", false, "message", "Forbidden"));
+            return ResponseEntity.status(403).body(ApiResponse.error("Forbidden"));
         }
 
         authenticatorAccountRepository.delete(acc);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", true);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(ApiResponse.success(null, "Account deleted successfully"));
     }
 }

@@ -19,6 +19,7 @@ public class AuthenticatorAccount {
     @Column(name = "account_name", nullable = false)
     private String accountName;
 
+    @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "secret_key", nullable = false)
     private String secretKey;
 

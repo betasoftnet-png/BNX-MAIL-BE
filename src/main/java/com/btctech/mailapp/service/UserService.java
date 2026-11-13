@@ -128,7 +128,8 @@ public class UserService {
         if (newSettings.getAutoCorrectEnabled() != null) existing.setAutoCorrectEnabled(newSettings.getAutoCorrectEnabled());
         if (newSettings.getSmartComposeEnabled() != null) existing.setSmartComposeEnabled(newSettings.getSmartComposeEnabled());
         
-        if (newSettings.getTwoFactorEnabled() != null) existing.setTwoFactorEnabled(newSettings.getTwoFactorEnabled());
+        // Maintain 2FA synchronization strictly from the authoritative User entity
+        existing.setTwoFactorEnabled(Boolean.TRUE.equals(user.getTwoFactorEnabled()));
         if (newSettings.getBiometricsEnabled() != null) existing.setBiometricsEnabled(newSettings.getBiometricsEnabled());
         if (newSettings.getLanguage() != null) existing.setLanguage(newSettings.getLanguage());
         if (newSettings.getReadingPaneMode() != null) existing.setReadingPaneMode(newSettings.getReadingPaneMode());

@@ -99,7 +99,32 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """);
 
-            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, and system_label_settings are verified and ready.");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS user_recovery_codes (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    code_hash VARCHAR(128) NOT NULL,
+                    used BOOLEAN NOT NULL DEFAULT FALSE,
+                    used_at TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_rec_user (user_id),
+                    INDEX idx_rec_user_used (user_id, used)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            try {
+                jdbcTemplate.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_totp_step BIGINT NULL");
+            } catch (Exception ignoreEx) {
+                // Ignore if column already exists or syntax differences
+            }
+
+            try {
+                jdbcTemplate.execute("ALTER TABLE users MODIFY COLUMN two_factor_secret VARCHAR(500) NULL");
+            } catch (Exception ignoreEx) {
+                // Ignore if syntax differences
+            }
+
+            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, system_label_settings, and user_recovery_codes are verified and ready.");
         } catch (Exception e) {
             log.error("Could not automatically create/verify tables: {}", e.getMessage());
         }
