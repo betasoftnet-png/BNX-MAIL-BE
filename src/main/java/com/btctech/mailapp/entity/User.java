@@ -96,6 +96,9 @@ public class User {
     @Column(name = "two_factor_enabled")
     private Boolean twoFactorEnabled = false;
 
+    @Column(name = "biometrics_enabled")
+    private Boolean biometricsEnabled = false;
+
     @com.fasterxml.jackson.annotation.JsonIgnore
     @Column(name = "two_factor_secret", length = 500)
     private String twoFactorSecret;

@@ -67,7 +67,7 @@ public class UserSettings {
     private Boolean twoFactorEnabled = false;
 
     @Builder.Default
-    private Boolean biometricsEnabled = true;
+    private Boolean biometricsEnabled = false;
 
     @Builder.Default
     private String language = "en_US";

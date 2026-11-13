@@ -186,7 +186,7 @@ public class UserController {
                 .smartComposeEnabled(settings.getSmartComposeEnabled())
                 .readingPaneMode(settings.getReadingPaneMode())
                 .twoFactorEnabled(user.getTwoFactorEnabled())
-                .biometricsEnabled(settings.getBiometricsEnabled())
+                .biometricsEnabled(user.getBiometricsEnabled())
                 .language(settings.getLanguage())
                 .fontFamily(settings.getFontFamily())
                 .textStyleFontSize(settings.getTextStyleFontSize())
