@@ -35,7 +35,6 @@ public class AuthController {
     private final SystemSettingRepository systemSettingRepository;
     private final com.btctech.mailapp.repository.BusinessProfileRepository businessProfileRepository;
     private final com.btctech.mailapp.repository.UserRepository userRepository;
-    private final com.btctech.mailapp.repository.BiometricCredentialRepository biometricCredentialRepository;
 
     /**
      * STEP 1: Register user (username + password)
@@ -290,30 +289,6 @@ public class AuthController {
 
         String userAgent = httpRequest.getHeader("User-Agent");
 
-        // 2.5 Check for Biometric Authentication
-        boolean hasBiometrics = Boolean.TRUE.equals(user.getBiometricsEnabled())
-                && biometricCredentialRepository.countByUserAndRevokedFalse(user) > 0;
-
-        if (hasBiometrics) {
-            Map<String, Object> claims = new HashMap<>();
-            try {
-                claims.put("ep", sessionService.encrypt(request.getPassword()));
-                claims.put("purpose", "bio_challenge");
-                claims.put("has2fa", Boolean.TRUE.equals(user.getTwoFactorEnabled()));
-            } catch (Exception e) {
-                log.error("Failed to encrypt password for Biometric token: {}", e.getMessage());
-                return ResponseEntity.internalServerError().body(ApiResponse.error("Internal server error during login"));
-            }
-            String tempToken = jwtUtil.generateTokenWithClaims(claims, "bio_" + request.getEmail());
-
-            Map<String, Object> challengeData = new HashMap<>();
-            challengeData.put("status", "BIOMETRIC_REQUIRED");
-            challengeData.put("tempToken", tempToken);
-            challengeData.put("email", request.getEmail());
-            challengeData.put("has2fa", Boolean.TRUE.equals(user.getTwoFactorEnabled()));
-            return ResponseEntity.ok(ApiResponse.success(challengeData, "Biometric verification required"));
-        }
-
         // 3. Check for 2FA
         if (Boolean.TRUE.equals(user.getTwoFactorEnabled())) {
             Map<String, Object> claims = new HashMap<>();
@@ -380,11 +355,11 @@ public class AuthController {
             return ResponseEntity.status(401).body(ApiResponse.error("Invalid or expired 2FA session"));
         }
 
-        if (subject == null || (!subject.startsWith("2fa_") && !subject.startsWith("bio_"))) {
+        if (subject == null || !subject.startsWith("2fa_")) {
             return ResponseEntity.status(401).body(ApiResponse.error("Invalid 2FA challenge token"));
         }
 
-        String email = subject.replace("2fa_", "").replace("bio_", "");
+        String email = subject.replace("2fa_", "");
         User user = userService.getUserByEmailOrUsername(email);
         if (user == null) {
             return ResponseEntity.status(404).body(ApiResponse.error("User not found"));
