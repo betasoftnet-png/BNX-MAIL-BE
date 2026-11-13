@@ -28,15 +28,7 @@ public class OAuthService {
                 .orElseThrow(() -> new RuntimeException("Invalid client_id"));
 
         String configuredUri = client.getRedirectUri();
-        boolean match = configuredUri.equals(redirectUri);
-        if (!match && configuredUri.contains(",")) {
-            for (String uri : configuredUri.split(",")) {
-                if (uri.trim().equals(redirectUri)) {
-                    match = true;
-                    break;
-                }
-            }
-        }
+        boolean match = isRedirectUriMatch(configuredUri, redirectUri);
 
         if (!match) {
             throw new RuntimeException("Invalid redirect_uri");
@@ -153,6 +145,32 @@ public class OAuthService {
         }
         
         return jwtUtil.generateTokenWithClaims(claims, data.email);
+    }
+
+    private boolean isRedirectUriMatch(String configuredUri, String incomingUri) {
+        if (configuredUri == null || incomingUri == null) {
+            return false;
+        }
+        String incomingClean = incomingUri.trim();
+        String incomingStripped = stripSlash(incomingClean);
+
+        if (configuredUri.equals(incomingClean) || stripSlash(configuredUri).equalsIgnoreCase(incomingStripped)) {
+            return true;
+        }
+        if (configuredUri.contains(",")) {
+            for (String uri : configuredUri.split(",")) {
+                String clean = uri.trim();
+                if (clean.equals(incomingClean) || stripSlash(clean).equalsIgnoreCase(incomingStripped)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private String stripSlash(String uri) {
+        if (uri == null) return "";
+        return uri.trim().replaceAll("/+$", "");
     }
 
     private static record AuthCodeData(String clientId, String email, long expiry) {}

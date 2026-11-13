@@ -20,6 +20,10 @@ public class CorsConfig implements WebMvcConfigurer {
                         "https://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
                         "http://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
                         "https://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+                        "http://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+                        "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+                        "https://bit-tool.com",
+                        "https://www.bit-tool.com",
                         "http://localhost:3000",
                         "http://localhost:5173" // for local frontend
                 )

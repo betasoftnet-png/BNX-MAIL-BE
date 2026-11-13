@@ -107,7 +107,13 @@ public class SecurityConfig {
             "http://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
             "https://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
             "http://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
-            "https://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io"
+            "https://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+            "http://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+            "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
+            "http://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io/",
+            "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io/",
+            "http://*.151.185.41.212.sslip.io",
+            "https://*.151.185.41.212.sslip.io"
         ));
 
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
