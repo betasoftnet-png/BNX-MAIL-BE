@@ -47,13 +47,21 @@ public class BiometricAuthService {
     @Value("${webauthn.rp.name:BNXmail}")
     private String rpName;
 
+    private static final long CHALLENGE_TTL_MS = 120_000L; // 2 minutes TTL
+
     private static class ChallengeData {
         final String challenge;
+        final Long userId;
         final long expiresAt;
 
         ChallengeData(String challenge) {
+            this(challenge, null, System.currentTimeMillis() + CHALLENGE_TTL_MS);
+        }
+
+        ChallengeData(String challenge, Long userId, long expiresAt) {
             this.challenge = challenge;
-            this.expiresAt = System.currentTimeMillis() + 120_000L; // 2 minutes TTL
+            this.userId = userId;
+            this.expiresAt = expiresAt;
         }
 
         boolean isExpired() {
@@ -114,7 +122,7 @@ public class BiometricAuthService {
         Map<String, Object> authenticatorSelection = new HashMap<>();
         authenticatorSelection.put("authenticatorAttachment", "platform");
         authenticatorSelection.put("userVerification", "required");
-        authenticatorSelection.put("residentKey", "discouraged");
+        authenticatorSelection.put("residentKey", "preferred");
         authenticatorSelection.put("requireResidentKey", false);
 
         // Exclude already registered credentials for this user
@@ -319,41 +327,45 @@ public class BiometricAuthService {
     }
 
     /**
-     * Step 1: Generate login options for biometric login
+     * Step 1: Generate login options for biometric login (supports both email-directed and username-less discoverable credentials)
      */
     public Map<String, Object> generateLoginOptions(String email, String origin) {
-        if (email == null || email.trim().isEmpty()) {
-            throw new IllegalArgumentException("Email address is required for biometric sign-in");
-        }
-
-        String rawEmail = email.trim().toLowerCase();
-        final String cleanEmail = rawEmail.contains("@") ? rawEmail : rawEmail + "@bnxmail.com";
-
-        User user = userRepository.findByEmail(cleanEmail)
-                .or(() -> userRepository.findByUsername(cleanEmail))
-                .orElseThrow(() -> new IllegalArgumentException("No account found with this email address"));
-
-        if (!Boolean.TRUE.equals(user.getBiometricsEnabled())) {
-            throw new IllegalStateException("Biometric authentication is not enabled for this account. Please sign in with your password.");
-        }
-
-        List<BiometricCredential> credentials = biometricCredentialRepository.findByUserAndRevokedFalse(user);
-        if (credentials.isEmpty()) {
-            throw new IllegalStateException("No registered biometric devices found for this account. Please sign in with password.");
-        }
-
         String challenge = generateRandomChallenge();
-        authChallenges.put("login_" + user.getId(), new ChallengeData(challenge));
-
         String rpId = resolveRpId(origin);
-
         List<Map<String, Object>> allowCredentials = new ArrayList<>();
-        for (BiometricCredential cred : credentials) {
-            Map<String, Object> item = new HashMap<>();
-            item.put("type", "public-key");
-            item.put("id", cred.getCredentialId());
-            item.put("transports", List.of("internal"));
-            allowCredentials.add(item);
+
+        if (email != null && !email.trim().isEmpty()) {
+            String rawEmail = email.trim().toLowerCase();
+            final String cleanEmail = rawEmail.contains("@") ? rawEmail : rawEmail + "@bnxmail.com";
+
+            User user = userRepository.findByEmail(cleanEmail)
+                    .or(() -> userRepository.findByUsername(cleanEmail))
+                    .orElseThrow(() -> new IllegalArgumentException("No account found with this email address"));
+
+            if (!Boolean.TRUE.equals(user.getBiometricsEnabled())) {
+                throw new IllegalStateException("Biometric authentication is not enabled for this account. Please sign in with your password.");
+            }
+
+            List<BiometricCredential> credentials = biometricCredentialRepository.findByUserAndRevokedFalse(user);
+            if (credentials.isEmpty()) {
+                throw new IllegalStateException("No registered biometric devices found for this account. Please sign in with password.");
+            }
+
+            authChallenges.put("login_" + user.getId(), new ChallengeData(challenge));
+            authChallenges.put("ch_" + challenge, new ChallengeData(challenge, user.getId(), System.currentTimeMillis() + CHALLENGE_TTL_MS));
+
+            for (BiometricCredential cred : credentials) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("type", "public-key");
+                item.put("id", cred.getCredentialId());
+                item.put("transports", List.of("internal"));
+                allowCredentials.add(item);
+            }
+            log.info("Generated WebAuthn login options for user: {}", user.getUsername());
+        } else {
+            // Discoverable resident credential login without pre-specified username
+            authChallenges.put("ch_" + challenge, new ChallengeData(challenge, null, System.currentTimeMillis() + CHALLENGE_TTL_MS));
+            log.info("Generated WebAuthn login options for discoverable resident credential login");
         }
 
         Map<String, Object> options = new HashMap<>();
@@ -363,7 +375,6 @@ public class BiometricAuthService {
         options.put("userVerification", "required");
         options.put("allowCredentials", allowCredentials);
 
-        log.info("Generated WebAuthn login options for user: {}", user.getUsername());
         return options;
     }
 
@@ -372,6 +383,22 @@ public class BiometricAuthService {
      */
     @Transactional
     public LoginResponseData verifyLogin(Map<String, Object> request, String origin, String ipAddress, String userAgent) {
+        String credentialId = (String) request.get("id");
+        if (credentialId == null || credentialId.trim().isEmpty()) {
+            credentialId = (String) request.get("rawId");
+        }
+        if (credentialId == null || credentialId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Credential ID is required");
+        }
+
+        BiometricCredential credential = biometricCredentialRepository.findByCredentialIdAndRevokedFalse(credentialId.trim())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown or revoked biometric credential"));
+
+        User user = credential.getUser();
+        if (user == null || !Boolean.TRUE.equals(user.getBiometricsEnabled())) {
+            throw new IllegalStateException("Biometric authentication is not enabled for this account");
+        }
+
         String email = (String) request.get("email");
         String tempToken = (String) request.get("tempToken");
         if ((email == null || email.trim().isEmpty()) && tempToken != null) {
@@ -383,8 +410,14 @@ public class BiometricAuthService {
             }
         }
 
-        if (email == null || email.trim().isEmpty()) {
-            throw new IllegalArgumentException("Email address is required");
+        String resolvedEmail = null;
+        if (email != null && !email.trim().isEmpty()) {
+            String rawEmail = email.trim().toLowerCase();
+            resolvedEmail = rawEmail.contains("@") ? rawEmail : rawEmail + "@bnxmail.com";
+            if (user.getEmail() != null && !user.getEmail().equalsIgnoreCase(resolvedEmail)
+                    && !user.getUsername().equalsIgnoreCase(resolvedEmail)) {
+                throw new IllegalArgumentException("Biometric credential does not belong to specified account");
+            }
         }
 
         String rawPassword = null;
@@ -398,38 +431,6 @@ public class BiometricAuthService {
             } catch (Exception e) {
                 log.warn("Could not decrypt password from tempToken in biometric verify: {}", e.getMessage());
             }
-        }
-
-        String rawEmail = email.trim().toLowerCase();
-        final String cleanEmail = rawEmail.contains("@") ? rawEmail : rawEmail + "@bnxmail.com";
-
-        User user = userRepository.findByEmail(cleanEmail)
-                .or(() -> userRepository.findByUsername(cleanEmail))
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
-
-        if (!Boolean.TRUE.equals(user.getBiometricsEnabled())) {
-            throw new IllegalStateException("Biometric authentication is not enabled for this account");
-        }
-
-        String challengeKey = "login_" + user.getId();
-        ChallengeData challengeData = authChallenges.remove(challengeKey);
-        if (challengeData == null || challengeData.isExpired()) {
-            throw new IllegalArgumentException("Authentication challenge expired or invalid. Please try again.");
-        }
-
-        String credentialId = (String) request.get("id");
-        if (credentialId == null || credentialId.trim().isEmpty()) {
-            credentialId = (String) request.get("rawId");
-        }
-        if (credentialId == null) {
-            throw new IllegalArgumentException("Credential ID is required");
-        }
-
-        BiometricCredential credential = biometricCredentialRepository.findByCredentialIdAndRevokedFalse(credentialId.trim())
-                .orElseThrow(() -> new IllegalArgumentException("Unknown or revoked biometric credential"));
-
-        if (!credential.getUser().getId().equals(user.getId())) {
-            throw new IllegalArgumentException("Biometric credential does not belong to this account");
         }
 
         @SuppressWarnings("unchecked")
@@ -458,6 +459,15 @@ public class BiometricAuthService {
             }
 
             String returnedChallenge = clientData.path("challenge").asText();
+            ChallengeData challengeData = authChallenges.remove("ch_" + returnedChallenge);
+            if (challengeData == null) {
+                challengeData = authChallenges.remove("login_" + user.getId());
+            }
+
+            if (challengeData == null || challengeData.isExpired()) {
+                throw new IllegalArgumentException("Authentication challenge expired or invalid. Please try again.");
+            }
+
             if (!challengeData.challenge.equals(returnedChallenge)) {
                 throw new IllegalArgumentException("Authentication challenge mismatch");
             }
@@ -499,7 +509,7 @@ public class BiometricAuthService {
         userRepository.save(user);
 
         // 5. Issue Tokens & Create Session
-        String userEmail = user.getEmail() != null ? user.getEmail() : cleanEmail;
+        String userEmail = user.getEmail() != null ? user.getEmail() : (resolvedEmail != null ? resolvedEmail : user.getUsername());
         String accessToken = jwtUtil.generateTokenForUser(user, userEmail);
         String refreshToken = authService.createRefreshToken(user, ipAddress, userAgent);
 

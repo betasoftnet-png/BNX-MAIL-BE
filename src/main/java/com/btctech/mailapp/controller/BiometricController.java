@@ -118,7 +118,7 @@ public class BiometricController {
      * Step 1 (Login): Generate assertion options for biometric login
      */
     @PostMapping("/login/options")
-    public ResponseEntity<?> getLoginOptions(@RequestBody Map<String, String> body,
+    public ResponseEntity<?> getLoginOptions(@RequestBody(required = false) Map<String, String> body,
                                              HttpServletRequest request) {
         String email = body != null ? body.get("email") : null;
         String tempToken = body != null ? body.get("tempToken") : null;
@@ -130,13 +130,13 @@ public class BiometricController {
                 log.warn("Invalid tempToken in login options: {}", e.getMessage());
             }
         }
-        if (email == null || email.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body(ApiResponse.error("Email address or active temporary token is required for biometric verification"));
-        }
 
         try {
             String origin = request.getHeader("Origin");
-            Map<String, Object> options = biometricAuthService.generateLoginOptions(email.trim(), origin);
+            Map<String, Object> options = biometricAuthService.generateLoginOptions(
+                    (email != null && !email.trim().isEmpty()) ? email.trim() : null,
+                    origin
+            );
             return ResponseEntity.ok(ApiResponse.success(options, "Biometric login options generated"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             log.warn("Biometric login options generation failed: {}", e.getMessage());
