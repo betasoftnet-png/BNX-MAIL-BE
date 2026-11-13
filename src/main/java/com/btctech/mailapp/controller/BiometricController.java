@@ -24,6 +24,7 @@ public class BiometricController {
 
     private final BiometricAuthService biometricAuthService;
     private final UserRepository userRepository;
+    private final com.btctech.mailapp.config.JwtUtil jwtUtil;
 
     /**
      * Get biometric status for current authenticated user
@@ -120,8 +121,17 @@ public class BiometricController {
     public ResponseEntity<?> getLoginOptions(@RequestBody Map<String, String> body,
                                              HttpServletRequest request) {
         String email = body != null ? body.get("email") : null;
+        String tempToken = body != null ? body.get("tempToken") : null;
+        if ((email == null || email.trim().isEmpty()) && tempToken != null) {
+            try {
+                String sub = jwtUtil.extractEmail(tempToken);
+                email = sub.replace("bio_", "").replace("2fa_", "");
+            } catch (Exception e) {
+                log.warn("Invalid tempToken in login options: {}", e.getMessage());
+            }
+        }
         if (email == null || email.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body(ApiResponse.error("Email address is required for biometric sign-in"));
+            return ResponseEntity.badRequest().body(ApiResponse.error("Email address or active temporary token is required for biometric verification"));
         }
 
         try {

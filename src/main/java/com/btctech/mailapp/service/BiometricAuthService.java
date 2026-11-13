@@ -113,8 +113,9 @@ public class BiometricAuthService {
 
         Map<String, Object> authenticatorSelection = new HashMap<>();
         authenticatorSelection.put("authenticatorAttachment", "platform");
-        authenticatorSelection.put("userVerification", "preferred");
-        authenticatorSelection.put("residentKey", "preferred");
+        authenticatorSelection.put("userVerification", "required");
+        authenticatorSelection.put("residentKey", "discouraged");
+        authenticatorSelection.put("requireResidentKey", false);
 
         // Exclude already registered credentials for this user
         List<BiometricCredential> existing = biometricCredentialRepository.findByUserAndRevokedFalse(user);
@@ -359,7 +360,7 @@ public class BiometricAuthService {
         options.put("challenge", challenge);
         options.put("rpId", rpId);
         options.put("timeout", 60000);
-        options.put("userVerification", "preferred");
+        options.put("userVerification", "required");
         options.put("allowCredentials", allowCredentials);
 
         log.info("Generated WebAuthn login options for user: {}", user.getUsername());
@@ -372,8 +373,31 @@ public class BiometricAuthService {
     @Transactional
     public LoginResponseData verifyLogin(Map<String, Object> request, String origin, String ipAddress, String userAgent) {
         String email = (String) request.get("email");
+        String tempToken = (String) request.get("tempToken");
+        if ((email == null || email.trim().isEmpty()) && tempToken != null) {
+            try {
+                String sub = jwtUtil.extractEmail(tempToken);
+                email = sub.replace("bio_", "").replace("2fa_", "");
+            } catch (Exception e) {
+                log.warn("Could not extract email from tempToken: {}", e.getMessage());
+            }
+        }
+
         if (email == null || email.trim().isEmpty()) {
             throw new IllegalArgumentException("Email address is required");
+        }
+
+        String rawPassword = null;
+        if (tempToken != null && !tempToken.trim().isEmpty()) {
+            try {
+                io.jsonwebtoken.Claims claims = jwtUtil.extractAllClaims(tempToken);
+                String encryptedPassword = claims.get("ep", String.class);
+                if (encryptedPassword != null) {
+                    rawPassword = sessionService.decrypt(encryptedPassword);
+                }
+            } catch (Exception e) {
+                log.warn("Could not decrypt password from tempToken in biometric verify: {}", e.getMessage());
+            }
         }
 
         String rawEmail = email.trim().toLowerCase();
@@ -479,12 +503,20 @@ public class BiometricAuthService {
         String accessToken = jwtUtil.generateTokenForUser(user, userEmail);
         String refreshToken = authService.createRefreshToken(user, ipAddress, userAgent);
 
-        // Optional mail session creation if encrypted password is available in MailAccount
+        // Mail session creation using decrypted password from tempToken or MailAccount
         try {
             MailAccount mailAccount = mailboxService.getMailAccountByEmail(userEmail);
-            if (mailAccount != null && mailAccount.getEncryptedPassword() != null && !mailAccount.getEncryptedPassword().isEmpty()) {
-                String decryptedPassword = sessionService.decrypt(mailAccount.getEncryptedPassword());
-                sessionService.createSession(user.getId(), mailAccount.getId(), decryptedPassword, accessToken);
+            if (mailAccount != null) {
+                if (rawPassword != null && !rawPassword.isEmpty()) {
+                    sessionService.createSession(user.getId(), mailAccount.getId(), rawPassword, accessToken);
+                    if (mailAccount.getEncryptedPassword() == null) {
+                        mailAccount.setEncryptedPassword(sessionService.encrypt(rawPassword));
+                        mailboxService.saveMailAccount(mailAccount);
+                    }
+                } else if (mailAccount.getEncryptedPassword() != null && !mailAccount.getEncryptedPassword().isEmpty()) {
+                    String decryptedPassword = sessionService.decrypt(mailAccount.getEncryptedPassword());
+                    sessionService.createSession(user.getId(), mailAccount.getId(), decryptedPassword, accessToken);
+                }
             }
         } catch (Exception e) {
             log.warn("Could not create IMAP mail session during biometric login: {}", e.getMessage());
