@@ -150,8 +150,8 @@ class TwoFactorAuthenticationIntegrationTest {
         String qrCodeUrl = twoFactorService.getQrCodeUrl(secret, "alice@bnxmail.com");
 
         assertNotNull(qrCodeUrl);
-        assertTrue(qrCodeUrl.startsWith("data:image/png;base64,") || qrCodeUrl.startsWith("otpauth://totp/"),
-                "QR code must be a valid data URI or otpauth URI");
+        assertTrue(qrCodeUrl.startsWith("data:image/png;base64,"),
+                "QR code must be a valid data URI base64 PNG image, but got: " + qrCodeUrl.substring(0, Math.min(30, qrCodeUrl.length())));
 
         String otpauthUri = twoFactorService.getOtpauthUri(secret, "alice@bnxmail.com");
         assertNotNull(otpauthUri);
@@ -266,6 +266,85 @@ class TwoFactorAuthenticationIntegrationTest {
         settings.setTwoFactorEnabled(Boolean.TRUE.equals(testUser.getTwoFactorEnabled()));
         assertFalse(settings.getTwoFactorEnabled());
         assertFalse(testUser.getTwoFactorEnabled());
+    }
+
+    @Test
+    @DisplayName("Scenario 9: RFC 6238 Standard Test Vectors")
+    void testRfc6238Vectors() throws Exception {
+        CodeGenerator codeGen = new DefaultCodeGenerator();
+        // RFC 6238 secret: "12345678901234567890" in Base32 is "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+        String base32Secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+        assertEquals("287082", codeGen.generate(base32Secret, 59L / 30L));
+        assertEquals("081804", codeGen.generate(base32Secret, 1111111109L / 30L));
+        assertEquals("050471", codeGen.generate(base32Secret, 1111111111L / 30L));
+        assertEquals("005924", codeGen.generate(base32Secret, 1234567890L / 30L));
+        assertEquals("279037", codeGen.generate(base32Secret, 2000000000L / 30L));
+    }
+
+    @Test
+    @DisplayName("Scenario 10: Secret Normalization Handling (spaces, case, padding)")
+    void testSecretNormalization() throws Exception {
+        CodeGenerator codeGen = new DefaultCodeGenerator();
+        String baseSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        long bucket = 1234567890L / 30L;
+        String expected = "005924";
+
+        assertEquals(expected, codeGen.generate(baseSecret, bucket));
+        // With spaces
+        String withSpaces = "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ";
+        String normalizedSpaces = withSpaces.replaceAll("\\s+", "").toUpperCase();
+        assertEquals(expected, codeGen.generate(normalizedSpaces, bucket));
+
+        // Lowercase
+        String lowercase = baseSecret.toLowerCase();
+        String normalizedCase = lowercase.toUpperCase();
+        assertEquals(expected, codeGen.generate(normalizedCase, bucket));
+    }
+
+    @Test
+    @DisplayName("Scenario 11: Clock Skew Tolerance with Configurable Window")
+    void testClockSkewTolerance() throws Exception {
+        String secret = twoFactorService.generateSecret();
+        testUser.setTwoFactorSecret(twoFactorService.encryptSecret(secret));
+
+        long currentBucket = (System.currentTimeMillis() / 1000L) / 30L;
+        CodeGenerator codeGen = new DefaultCodeGenerator();
+
+        // Bucket - 2 (60 seconds behind server time)
+        String pastCode = codeGen.generate(secret, currentBucket - 2);
+        assertTrue(twoFactorService.verifyCode(testUser, pastCode), "Code from 60 seconds ago (-2 time steps) must be accepted");
+
+        // Advance lastTotpStep
+        testUser.setLastTotpStep(null);
+
+        // Bucket + 2 (60 seconds ahead of server time)
+        String futureCode = codeGen.generate(secret, currentBucket + 2);
+        assertTrue(twoFactorService.verifyCode(testUser, futureCode), "Code from 60 seconds in the future (+2 time steps) must be accepted");
+    }
+
+    @Test
+    @DisplayName("Scenario 12: Race Condition Recovery via Client Setup Secret")
+    void testRaceConditionRecovery() throws Exception {
+        String wizardSecret = twoFactorService.generateSecret();
+        String overwrittenSecret = twoFactorService.generateSecret();
+
+        // Simulate DB having overwrittenSecret while user has wizardSecret on screen
+        testUser.setTwoFactorSecret(twoFactorService.encryptSecret(overwrittenSecret));
+
+        long currentBucket = (System.currentTimeMillis() / 1000L) / 30L;
+        CodeGenerator codeGen = new DefaultCodeGenerator();
+        String codeFromWizard = codeGen.generate(wizardSecret, currentBucket);
+
+        // Verification without client secret would fail against overwritten secret
+        assertFalse(twoFactorService.verifyCode(testUser, "000000"));
+
+        // Verification with client secret should succeed and synchronize user's secret
+        boolean verified = twoFactorService.verifyCode(testUser, codeFromWizard, wizardSecret);
+        assertTrue(verified, "Verification must succeed using wizard setup secret fallback");
+
+        // Verify user secret was synchronized to wizardSecret
+        assertEquals(wizardSecret, twoFactorService.decryptSecret(testUser.getTwoFactorSecret()));
     }
 }
 

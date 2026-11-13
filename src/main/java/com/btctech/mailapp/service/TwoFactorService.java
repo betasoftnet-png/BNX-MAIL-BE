@@ -41,6 +41,9 @@ public class TwoFactorService {
     @Value("${encryption.key:1234567890123456}")
     private String encryptionKey;
 
+    @Value("${totp.time.discrepancy:2}")
+    private int timeDiscrepancy = 2;
+
     @Autowired
     private UserRecoveryCodeRepository userRecoveryCodeRepository;
 
@@ -200,11 +203,31 @@ public class TwoFactorService {
         attemptTracker.remove(rateLimitKey);
     }
 
+    public String normalizeSecret(String secret) {
+        if (secret == null) {
+            return null;
+        }
+        return secret.replaceAll("\\s+", "").toUpperCase();
+    }
+
     /**
      * Verifies TOTP with replay protection and per-user time step tracking
      */
     public boolean verifyCode(User user, String code) {
-        if (user == null || user.getTwoFactorSecret() == null || code == null || code.trim().length() != 6) {
+        return verifyCode(user, code, null);
+    }
+
+    /**
+     * Verifies TOTP with optional client-provided setup secret fallback (to eliminate setup race conditions)
+     */
+    public boolean verifyCode(User user, String code, String clientSetupSecret) {
+        if (user == null || code == null) {
+            return false;
+        }
+
+        String cleanCode = code.replaceAll("[^0-9]", "");
+        if (cleanCode.length() != 6) {
+            log.warn("TOTP verification rejected: code must be exactly 6 digits (received length: {})", cleanCode.length());
             return false;
         }
 
@@ -214,29 +237,67 @@ public class TwoFactorService {
             throw new RuntimeException("Too many invalid attempts. Please wait 1 minute before trying again.");
         }
 
-        String plainSecret = decryptSecret(user.getTwoFactorSecret());
-        if (plainSecret == null) {
+        String plainSecret = null;
+        if (user.getTwoFactorSecret() != null) {
+            plainSecret = normalizeSecret(decryptSecret(user.getTwoFactorSecret()));
+        }
+
+        String plainClientSecret = null;
+        if (clientSetupSecret != null && !clientSetupSecret.trim().isEmpty()) {
+            plainClientSecret = normalizeSecret(decryptSecret(clientSetupSecret));
+        }
+
+        if (plainSecret == null && plainClientSecret == null) {
+            log.warn("TOTP verification rejected: user {} has no 2FA secret configured and no setup secret provided", user.getUsername());
             return false;
         }
 
         long currentSeconds = System.currentTimeMillis() / 1000L;
         long currentBucket = currentSeconds / 30L;
+        int discrepancy = Math.max(1, timeDiscrepancy);
 
         CodeGenerator codeGenerator = new DefaultCodeGenerator();
         Long matchedBucket = null;
+        boolean matchedOnClientSecret = false;
 
-        for (long b = currentBucket - 1; b <= currentBucket + 1; b++) {
-            try {
-                String expected = codeGenerator.generate(plainSecret, b);
-                if (expected.equals(code.trim())) {
-                    matchedBucket = b;
-                    break;
+        // Try primary user stored secret
+        if (plainSecret != null) {
+            for (long b = currentBucket - discrepancy; b <= currentBucket + discrepancy; b++) {
+                try {
+                    String expected = codeGenerator.generate(plainSecret, b);
+                    if (MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), cleanCode.getBytes(StandardCharsets.UTF_8))) {
+                        matchedBucket = b;
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.warn("Error generating TOTP code for bucket {}: {}", b, e.getMessage());
                 }
-            } catch (Exception ignored) {}
+            }
+        }
+
+        // Fallback: If not matched on stored secret, try clientSetupSecret (handles setup re-initiation race conditions)
+        if (matchedBucket == null && plainClientSecret != null && !plainClientSecret.equals(plainSecret)) {
+            log.info("Verifying 2FA code against wizard setup secret for user: {}", user.getUsername());
+            for (long b = currentBucket - discrepancy; b <= currentBucket + discrepancy; b++) {
+                try {
+                    String expected = codeGenerator.generate(plainClientSecret, b);
+                    if (MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), cleanCode.getBytes(StandardCharsets.UTF_8))) {
+                        matchedBucket = b;
+                        matchedOnClientSecret = true;
+                        // Synchronize user entity with this valid verified secret
+                        user.setTwoFactorSecret(encryptSecret(plainClientSecret));
+                        break;
+                    }
+                } catch (Exception e) {
+                    log.warn("Error generating fallback TOTP code for bucket {}: {}", b, e.getMessage());
+                }
+            }
         }
 
         if (matchedBucket == null) {
             recordFailedAttempt(rateLimitKey);
+            log.warn("✗ TOTP verification failed for user: {} (scanned window [{}, {}], discrepancy: ±{} steps)",
+                    user.getUsername(), currentBucket - discrepancy, currentBucket + discrepancy, discrepancy);
             return false;
         }
 
@@ -249,29 +310,37 @@ public class TwoFactorService {
 
         user.setLastTotpStep(matchedBucket);
         resetFailedAttempts(rateLimitKey);
+        log.info("✓ TOTP verification succeeded for user: {} at time bucket delta: {} (clientSecretFallback: {})",
+                user.getUsername(), (matchedBucket - currentBucket), matchedOnClientSecret);
         return true;
     }
 
     /**
-     * Backward-compatible simple verification for initial setup before user entity has lastTotpStep
+     * Backward-compatible simple verification with clock skew discrepancy
      */
     public boolean verifyCode(String secret, String code) {
-        if (secret == null || code == null || code.trim().length() != 6) {
+        if (secret == null || code == null) {
             return false;
         }
-        String plainSecret = decryptSecret(secret);
+        String cleanCode = code.replaceAll("[^0-9]", "");
+        if (cleanCode.length() != 6) {
+            return false;
+        }
+
+        String plainSecret = normalizeSecret(decryptSecret(secret));
         if (plainSecret == null) {
             return false;
         }
 
         long currentSeconds = System.currentTimeMillis() / 1000L;
         long currentBucket = currentSeconds / 30L;
+        int discrepancy = Math.max(1, timeDiscrepancy);
 
         CodeGenerator codeGenerator = new DefaultCodeGenerator();
-        for (long b = currentBucket - 1; b <= currentBucket + 1; b++) {
+        for (long b = currentBucket - discrepancy; b <= currentBucket + discrepancy; b++) {
             try {
                 String expected = codeGenerator.generate(plainSecret, b);
-                if (expected.equals(code.trim())) {
+                if (MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), cleanCode.getBytes(StandardCharsets.UTF_8))) {
                     return true;
                 }
             } catch (Exception ignored) {}

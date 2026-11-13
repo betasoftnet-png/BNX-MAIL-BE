@@ -48,11 +48,13 @@ public class TwoFactorController {
 
     /**
      * Step 1: Initiate 2FA setup.
-     * Generates a new TOTP secret, encrypts it at rest in user entity (2FA not enabled yet),
+     * Generates a new TOTP secret (or reuses unverified pending setup secret to prevent race conditions),
+     * encrypts it at rest in user entity (2FA not enabled yet),
      * and returns the base64 PNG data URI QR code + plain secret for display.
      */
     @PostMapping("/setup")
-    public ResponseEntity<?> initiateSetup(@AuthenticationPrincipal String principal) {
+    public ResponseEntity<?> initiateSetup(@AuthenticationPrincipal String principal,
+                                           @RequestParam(value = "refresh", required = false, defaultValue = "false") boolean refresh) {
         if (principal == null) {
             return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
@@ -60,23 +62,35 @@ public class TwoFactorController {
                 .or(() -> userRepository.findByEmail(principal))
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        String rawSecret = twoFactorService.generateSecret();
+        String rawSecret = null;
+        // Reuse unverified pending setup secret if one already exists and refresh is not forced
+        if (!refresh && !Boolean.TRUE.equals(user.getTwoFactorEnabled()) && user.getTwoFactorSecret() != null) {
+            try {
+                rawSecret = twoFactorService.decryptSecret(user.getTwoFactorSecret());
+            } catch (Exception e) {
+                log.warn("Could not decrypt existing pending 2FA secret, generating new one: {}", e.getMessage());
+            }
+        }
+
+        if (rawSecret == null || rawSecret.trim().isEmpty()) {
+            rawSecret = twoFactorService.generateSecret();
+            String encryptedSecret = twoFactorService.encryptSecret(rawSecret);
+            user.setTwoFactorSecret(encryptedSecret);
+            // Note: twoFactorEnabled remains FALSE until verified with a valid code
+            user.setLastTotpStep(null);
+            userRepository.save(user);
+        }
+
         String label = (user.getEmail() != null && !user.getEmail().trim().isEmpty()) ? user.getEmail() : user.getUsername();
         String qrCodeUrl = twoFactorService.getQrCodeUrl(rawSecret, label);
         String otpauthUri = twoFactorService.getOtpauthUri(rawSecret, label);
-
-        // Encrypt secret at rest using AES-GCM before persisting
-        String encryptedSecret = twoFactorService.encryptSecret(rawSecret);
-        user.setTwoFactorSecret(encryptedSecret);
-        // Note: twoFactorEnabled remains FALSE until verified with a valid code
-        user.setLastTotpStep(null);
-        userRepository.save(user);
 
         Map<String, Object> data = new HashMap<>();
         data.put("secret", rawSecret);
         data.put("qrCodeUrl", qrCodeUrl);
         data.put("otpauthUri", otpauthUri);
 
+        log.info("2FA setup initiated/retrieved for user: {}", user.getUsername());
         return ResponseEntity.ok(ApiResponse.success(data, "2FA setup initiated"));
     }
 
@@ -89,21 +103,23 @@ public class TwoFactorController {
         if (principal == null) {
             return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
         }
-        String code = body != null ? body.get("code") : null;
+        String code = body != null ? (body.get("code") != null ? body.get("code") : body.get("otp")) : null;
         if (code == null || code.trim().isEmpty()) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Verification code is required"));
         }
+
+        String clientSecret = body != null ? body.get("secret") : null;
 
         User user = userRepository.findByUsername(principal)
                 .or(() -> userRepository.findByEmail(principal))
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        if (user.getTwoFactorSecret() == null) {
+        if (user.getTwoFactorSecret() == null && (clientSecret == null || clientSecret.trim().isEmpty())) {
             return ResponseEntity.badRequest().body(ApiResponse.error("No pending 2FA setup found. Please initiate setup first."));
         }
 
         try {
-            if (twoFactorService.verifyCode(user, code)) {
+            if (twoFactorService.verifyCode(user, code, clientSecret)) {
                 // Authoritatively enable 2FA on User entity
                 user.setTwoFactorEnabled(true);
                 userRepository.save(user);
