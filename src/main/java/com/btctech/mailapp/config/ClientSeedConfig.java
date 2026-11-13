@@ -40,7 +40,7 @@ public class ClientSeedConfig {
             clientAppRepository.findByClientId("cliks-app").ifPresentOrElse(
                 client -> {
                     log.info("Updating cliks-app OAuth client redirect URI...");
-                    client.setRedirectUri("https://cliks.beta-softnet.com/auth");
+                    client.setRedirectUri("https://cliks.beta-softnet.com/auth,https://cliks.beta-softnet.com,https://cliks.beta-softnet.com/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/");
                     clientAppRepository.save(client);
                 },
                 () -> {
@@ -49,7 +49,7 @@ public class ClientSeedConfig {
                             .clientId("cliks-app")
                             .clientSecret("secure-cliks-secret-2026")
                             .appName("Cliks")
-                            .redirectUri("https://cliks.beta-softnet.com/auth")
+                            .redirectUri("https://cliks.beta-softnet.com/auth,https://cliks.beta-softnet.com,https://cliks.beta-softnet.com/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/")
                             .build();
                     clientAppRepository.save(client);
                     log.info("Test OAuth client seeded: cliks-app");

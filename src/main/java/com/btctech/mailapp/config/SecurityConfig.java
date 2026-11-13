@@ -112,6 +112,10 @@ public class SecurityConfig {
             "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
             "http://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io/",
             "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io/",
+            "http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io",
+            "https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io",
+            "http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/",
+            "https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/",
             "http://*.151.185.41.212.sslip.io",
             "https://*.151.185.41.212.sslip.io"
         ));
