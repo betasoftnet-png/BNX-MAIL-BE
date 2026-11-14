@@ -24,6 +24,8 @@ public class CorsConfig implements WebMvcConfigurer {
                         "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
                         "http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io",
                         "https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io",
+                        "http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io",
+                        "https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io",
                         "https://cliks.beta-softnet.com",
                         "https://bit-tool.com",
                         "https://www.bit-tool.com",
