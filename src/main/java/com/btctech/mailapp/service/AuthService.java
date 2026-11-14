@@ -44,6 +44,15 @@ public class AuthService {
     @Value("${mail.from:${MAIL_FROM:${spring.mail.username:${SPRING_MAIL_USERNAME:beta@beta-softnet.com}}}}")
     private String mailFrom;
 
+    @Value("${spring.mail.host:${SPRING_MAIL_HOST:${mail.smtp.host:${SMTP_HOST:}}}}")
+    private String smtpHost;
+
+    private boolean isSmtpConfigMissing() {
+        return smtpHost == null || smtpHost.trim().isEmpty()
+                || "localhost".equalsIgnoreCase(smtpHost.trim())
+                || "127.0.0.1".equals(smtpHost.trim());
+    }
+
     @Value("${sms.provider.authkey:${SMS_PROVIDER_AUTHKEY:${sms.auth.key:}}}")
     private String smsAuthKey;
 
@@ -564,8 +573,12 @@ public class AuthService {
     public RecoveryOptionsResponse getRecoveryOptions(String identifier) {
         User user = userService.getUserByEmailOrUsername(identifier);
 
+        String emailToUse = (user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty())
+                ? user.getRecoveryEmail().trim()
+                : (user.getEmail() != null && !user.getEmail().trim().isEmpty() ? user.getEmail().trim() : null);
+
         return RecoveryOptionsResponse.builder()
-                .recoveryEmail(maskEmail(user.getRecoveryEmail()))
+                .recoveryEmail(maskEmail(emailToUse))
                 .phoneNumber(maskPhone(user.getPhoneNumber()))
                 .build();
     }
@@ -577,10 +590,25 @@ public class AuthService {
     public void sendRecoveryOtp(SendOtpRequest request) {
         User user = userService.getUserByEmailOrUsername(request.getIdentifier());
 
-        if ("EMAIL".equalsIgnoreCase(request.getMethod()) && (user.getRecoveryEmail() == null || user.getRecoveryEmail().trim().isEmpty())) {
-            throw new MailException("No recovery email configured for this account");
-        } else if ("PHONE".equalsIgnoreCase(request.getMethod()) && (user.getPhoneNumber() == null || user.getPhoneNumber().trim().isEmpty())) {
-            throw new MailException("No recovery phone configured for this account");
+        String recipientEmail = null;
+        if ("EMAIL".equalsIgnoreCase(request.getMethod())) {
+            if (user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty()) {
+                recipientEmail = user.getRecoveryEmail().trim();
+            } else if (user.getEmail() != null && !user.getEmail().trim().isEmpty()) {
+                recipientEmail = user.getEmail().trim();
+            } else if (request.getIdentifier() != null && request.getIdentifier().contains("@")) {
+                recipientEmail = request.getIdentifier().trim();
+            }
+
+            if (recipientEmail == null || recipientEmail.isEmpty()) {
+                throw new MailException("No recovery or registered email configured for this account");
+            }
+        } else if ("PHONE".equalsIgnoreCase(request.getMethod())) {
+            if (user.getPhoneNumber() == null || user.getPhoneNumber().trim().isEmpty()) {
+                throw new MailException("No recovery phone configured for this account");
+            }
+        } else {
+            throw new MailException("Invalid recovery method");
         }
 
         // Clean up old tokens
@@ -600,7 +628,7 @@ public class AuthService {
         passwordResetTokenRepository.save(resetToken);
 
         if ("EMAIL".equalsIgnoreCase(request.getMethod())) {
-            sendOtpEmail(user.getRecoveryEmail(), otp);
+            sendOtpEmail(recipientEmail, otp);
         } else if ("PHONE".equalsIgnoreCase(request.getMethod())) {
             sendOtpSms(user.getPhoneNumber(), otp);
         } else {
@@ -610,19 +638,29 @@ public class AuthService {
 
     private void sendOtpEmail(String toAddress, String otp) {
         if (toAddress == null || toAddress.trim().isEmpty()) {
-            throw new MailException("No recovery email configured for this account");
+            throw new MailException("No recovery or registered email configured for this account");
+        }
+
+        String recipient = toAddress.trim();
+        if (!recipient.matches("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) {
+            throw new MailException("Invalid recipient email address format: " + recipient);
+        }
+
+        if (isSmtpConfigMissing()) {
+            log.error("Cannot deliver OTP email: SMTP host is not configured. Please set SPRING_MAIL_HOST / SMTP_HOST in the environment.");
+            throw new MailException("SMTP configuration is missing. Please configure an external SMTP host (SPRING_MAIL_HOST) and credentials.");
         }
 
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "beta@beta-softnet.com";
             message.setFrom(fromAddress);
-            message.setTo(toAddress.trim());
+            message.setTo(recipient);
             message.setSubject("Your BNX Mail Password Reset OTP");
             message.setText("Your OTP for password reset is: " + otp + "\nThis code will expire in 15 minutes.\n\nIf you did not request this code, please ignore this email or contact support.");
             
             javaMailSender.send(message);
-            log.info("Sent recovery OTP email to masked recipient: {}", maskEmail(toAddress));
+            log.info("Sent recovery OTP email to masked recipient: {}", maskEmail(recipient));
         } catch (org.springframework.mail.MailAuthenticationException mae) {
             log.error("SMTP Authentication failed: Check SMTP credentials. Details: {}", mae.getMessage());
             throw new MailException("SMTP authentication failed. Please verify mail credentials or contact administrator.");

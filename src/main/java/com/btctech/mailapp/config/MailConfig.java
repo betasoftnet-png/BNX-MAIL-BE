@@ -14,7 +14,7 @@ import java.util.Properties;
 @Slf4j
 public class MailConfig {
 
-    @Value("${spring.mail.host:${SPRING_MAIL_HOST:${mail.smtp.host:${SMTP_HOST:localhost}}}}")
+    @Value("${spring.mail.host:${SPRING_MAIL_HOST:${mail.smtp.host:${SMTP_HOST:}}}}")
     private String host;
 
     @Value("${spring.mail.port:${SPRING_MAIL_PORT:${mail.smtp.port:${SMTP_PORT:587}}}}")
@@ -48,7 +48,7 @@ public class MailConfig {
     @Primary
     public JavaMailSender javaMailSender() {
         JavaMailSenderImpl mailSender = new JavaMailSenderImpl();
-        String resolvedHost = (host != null && !host.trim().isEmpty()) ? host.trim() : "localhost";
+        String resolvedHost = (host != null) ? host.trim() : "";
         int resolvedPort = port > 0 ? port : 587;
         String resolvedProtocol = (protocol != null && !protocol.trim().isEmpty()) ? protocol.trim() : "smtp";
 
@@ -86,8 +86,8 @@ public class MailConfig {
             props.put("mail.smtp.socketFactory.fallback", "false");
         }
 
-        if ("localhost".equalsIgnoreCase(resolvedHost) || "127.0.0.1".equals(resolvedHost)) {
-            log.warn("⚠️ JavaMailSender is configured for '{}' (port {}). In production, configure SPRING_MAIL_HOST / SMTP_HOST to an external SMTP provider.", resolvedHost, resolvedPort);
+        if (resolvedHost.isEmpty() || "localhost".equalsIgnoreCase(resolvedHost) || "127.0.0.1".equals(resolvedHost)) {
+            log.warn("⚠️ JavaMailSender has no external SMTP host configured. To enable email delivery, set SPRING_MAIL_HOST / SMTP_HOST in the environment.");
         } else {
             log.info("✓ JavaMailSender configured: host={}, port={}, auth={}, starttls={}, ssl={}",
                     resolvedHost, resolvedPort, auth && hasCredentials, useStarttls, useSsl);

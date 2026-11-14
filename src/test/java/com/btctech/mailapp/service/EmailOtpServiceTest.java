@@ -2,6 +2,7 @@ package com.btctech.mailapp.service;
 
 import com.btctech.mailapp.config.JwtUtil;
 import com.btctech.mailapp.config.MailConfig;
+import com.btctech.mailapp.dto.RecoveryOptionsResponse;
 import com.btctech.mailapp.dto.ResetPasswordRequest;
 import com.btctech.mailapp.dto.SendOtpRequest;
 import com.btctech.mailapp.entity.PasswordResetToken;
@@ -72,6 +73,7 @@ class EmailOtpServiceTest {
         );
 
         ReflectionTestUtils.setField(authService, "mailFrom", "noreply@bnxmail.com");
+        ReflectionTestUtils.setField(authService, "smtpHost", "smtp.provider.com");
 
         testUser = new User();
         testUser.setId(100L);
@@ -118,10 +120,82 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("2. sendRecoveryOtp (EMAIL) throws exception and propagates failure when SMTP fails")
+    @DisplayName("2. sendRecoveryOtp delivers to Gmail address when registered email is Gmail")
+    void testSendRecoveryOtp_Gmail_Success() {
+        testUser.setEmail("johndoe@gmail.com");
+        testUser.setRecoveryEmail(null);
+        when(userService.getUserByEmailOrUsername("johndoe@gmail.com")).thenReturn(testUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("johndoe@gmail.com");
+        request.setMethod("EMAIL");
+
+        authService.sendRecoveryOtp(request);
+
+        ArgumentCaptor<SimpleMailMessage> msgCaptor = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(msgCaptor.capture());
+        SimpleMailMessage sentMsg = msgCaptor.getValue();
+        assertEquals("johndoe@gmail.com", sentMsg.getTo()[0]);
+    }
+
+    @Test
+    @DisplayName("3. sendRecoveryOtp delivers to Outlook address when registered email is Outlook")
+    void testSendRecoveryOtp_Outlook_Success() {
+        testUser.setEmail("johndoe@outlook.com");
+        testUser.setRecoveryEmail(null);
+        when(userService.getUserByEmailOrUsername("johndoe@outlook.com")).thenReturn(testUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("johndoe@outlook.com");
+        request.setMethod("EMAIL");
+
+        authService.sendRecoveryOtp(request);
+
+        ArgumentCaptor<SimpleMailMessage> msgCaptor = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(msgCaptor.capture());
+        SimpleMailMessage sentMsg = msgCaptor.getValue();
+        assertEquals("johndoe@outlook.com", sentMsg.getTo()[0]);
+    }
+
+    @Test
+    @DisplayName("4. sendRecoveryOtp prioritizes configured recoveryEmail over registered email")
+    void testSendRecoveryOtp_RecoveryEmail_PriorityOverRegisteredEmail() {
+        testUser.setEmail("johndoe@bnxmail.com");
+        testUser.setRecoveryEmail("johndoe.personal@yahoo.com");
+        when(userService.getUserByEmailOrUsername("johndoe@bnxmail.com")).thenReturn(testUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("johndoe@bnxmail.com");
+        request.setMethod("EMAIL");
+
+        authService.sendRecoveryOtp(request);
+
+        ArgumentCaptor<SimpleMailMessage> msgCaptor = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(msgCaptor.capture());
+        SimpleMailMessage sentMsg = msgCaptor.getValue();
+        assertEquals("johndoe.personal@yahoo.com", sentMsg.getTo()[0]);
+    }
+
+    @Test
+    @DisplayName("5. sendRecoveryOtp throws clear configuration error when SMTP host is missing or localhost")
+    void testSendRecoveryOtp_MissingSmtpConfig_ThrowsConfigurationException() {
+        ReflectionTestUtils.setField(authService, "smtpHost", "localhost");
+        when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("testuser");
+        request.setMethod("EMAIL");
+
+        MailException ex = assertThrows(MailException.class, () -> authService.sendRecoveryOtp(request));
+        assertTrue(ex.getMessage().contains("SMTP configuration is missing"));
+        verifyNoInteractions(javaMailSender);
+    }
+
+    @Test
+    @DisplayName("6. sendRecoveryOtp (EMAIL) throws exception and propagates failure when SMTP connection fails")
     void testSendRecoveryOtp_Email_SmtpFailure_ThrowsMailException() {
         when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
-        doThrow(new MailSendException("Could not connect to SMTP host: 127.0.0.1, port: 25"))
+        doThrow(new MailSendException("Could not connect to SMTP server"))
                 .when(javaMailSender).send(any(SimpleMailMessage.class));
 
         SendOtpRequest request = new SendOtpRequest();
@@ -133,7 +207,7 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("3. sendRecoveryOtp (EMAIL) throws exception when SMTP authentication fails")
+    @DisplayName("7. sendRecoveryOtp (EMAIL) throws exception when SMTP authentication fails")
     void testSendRecoveryOtp_Email_SmtpAuthFailure_ThrowsMailException() {
         when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
         doThrow(new MailAuthenticationException("Authentication failed"))
@@ -148,9 +222,10 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("4. sendRecoveryOtp (EMAIL) fails if user has no recovery email configured")
-    void testSendRecoveryOtp_Email_NoRecoveryEmail_ThrowsException() {
+    @DisplayName("8. sendRecoveryOtp (EMAIL) fails if user has neither recovery email nor registered email")
+    void testSendRecoveryOtp_Email_NoEmail_ThrowsException() {
         testUser.setRecoveryEmail(null);
+        testUser.setEmail(null);
         when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
 
         SendOtpRequest request = new SendOtpRequest();
@@ -158,12 +233,12 @@ class EmailOtpServiceTest {
         request.setMethod("EMAIL");
 
         MailException ex = assertThrows(MailException.class, () -> authService.sendRecoveryOtp(request));
-        assertEquals("No recovery email configured for this account", ex.getMessage());
+        assertTrue(ex.getMessage().contains("No recovery or registered email configured"));
         verifyNoInteractions(javaMailSender);
     }
 
     @Test
-    @DisplayName("5. verifyOtp succeeds with valid token and fails with invalid/expired token")
+    @DisplayName("9. verifyOtp succeeds with valid token and fails with invalid/expired token")
     void testVerifyOtp_Flow() {
         when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
 
@@ -200,7 +275,7 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("6. resetPassword successfully updates password and invalidates used OTP")
+    @DisplayName("10. resetPassword successfully updates password and invalidates used OTP")
     void testResetPassword_Success() {
         when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
 
@@ -224,7 +299,19 @@ class EmailOtpServiceTest {
     }
 
     @Test
-    @DisplayName("7. MailConfig initializes JavaMailSender correctly with external properties")
+    @DisplayName("11. getRecoveryOptions falls back to registered email when recovery email is null")
+    void testGetRecoveryOptions_FallbackToRegisteredEmail() {
+        testUser.setEmail("registered@gmail.com");
+        testUser.setRecoveryEmail(null);
+        when(userService.getUserByEmailOrUsername("registered@gmail.com")).thenReturn(testUser);
+
+        RecoveryOptionsResponse options = authService.getRecoveryOptions("registered@gmail.com");
+        assertNotNull(options.getRecoveryEmail());
+        assertTrue(options.getRecoveryEmail().contains("@gmail.com"));
+    }
+
+    @Test
+    @DisplayName("12. MailConfig initializes JavaMailSender correctly with external properties")
     void testMailConfig_Properties() {
         MailConfig mailConfig = new MailConfig();
         ReflectionTestUtils.setField(mailConfig, "host", "smtp.hostinger.com");
@@ -255,4 +342,3 @@ class EmailOtpServiceTest {
         assertEquals("*", props.getProperty("mail.smtp.ssl.trust"));
     }
 }
-
