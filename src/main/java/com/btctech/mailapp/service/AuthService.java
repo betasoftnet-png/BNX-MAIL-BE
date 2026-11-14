@@ -766,12 +766,16 @@ public class AuthService {
         // Delete used token
         passwordResetTokenRepository.delete(token);
 
-        // Optionally, revoke all active sessions so they have to log in with new password
+        // Revoke all active refresh tokens so they have to log in with new password
         List<RefreshToken> activeTokens = refreshTokenRepository.findAllByUserAndRevokedFalse(user);
         for (RefreshToken rt : activeTokens) {
             rt.setRevoked(true);
             refreshTokenRepository.save(rt);
         }
+
+        // Clean up active UserSession records so stale passwords don't trigger IMAP 500 errors
+        sessionService.deleteSessionsByUserId(user.getId());
+
         log.info("Revoked all active sessions for user {} after password reset", user.getUsername());
     }
 

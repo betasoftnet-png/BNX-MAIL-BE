@@ -24,6 +24,18 @@ public class MailReceiveController {
     private final SessionService sessionService;
     private final com.btctech.mailapp.service.RecipientSuggestionService recipientSuggestionService;
 
+    private boolean isAuthenticationOrSessionError(Throwable e) {
+        if (e == null) return false;
+        if (e instanceof jakarta.mail.AuthenticationFailedException) return true;
+        String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+        return msg.contains("session not found")
+                || msg.contains("session expired")
+                || msg.contains("please login again")
+                || msg.contains("authentication failed")
+                || msg.contains("invalid credentials")
+                || (e.getCause() != null && isAuthenticationOrSessionError(e.getCause()));
+    }
+
     /**
      * Get inbox emails
      */
@@ -44,7 +56,7 @@ public class MailReceiveController {
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null) {
-                return ResponseEntity.badRequest()
+                return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
 
@@ -79,6 +91,11 @@ public class MailReceiveController {
 
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
+            if (isAuthenticationOrSessionError(e)) {
+                log.warn("Session/auth expired during inbox fetch for {}: {}", userEmail, e.getMessage());
+                return ResponseEntity.status(401)
+                        .body(ApiResponse.error("Session expired or invalid credentials. Please login again."));
+            }
             log.error("CRITICAL error fetching inbox for {}: {}", userEmail, e.getMessage(), e);
             return ResponseEntity.status(500)
                     .body(ApiResponse.error("Failed to fetch inbox: " + e.getMessage()));
@@ -104,7 +121,7 @@ public class MailReceiveController {
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null) {
-                return ResponseEntity.badRequest()
+                return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
 
@@ -128,6 +145,11 @@ public class MailReceiveController {
 
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
+            if (isAuthenticationOrSessionError(e)) {
+                log.warn("Session/auth expired during unread fetch for {}: {}", userEmail, e.getMessage());
+                return ResponseEntity.status(401)
+                        .body(ApiResponse.error("Session expired or invalid credentials. Please login again."));
+            }
             log.error("CRITICAL error fetching unread emails for {}: {}", userEmail, e.getMessage(), e);
             return ResponseEntity.status(500)
                     .body(ApiResponse.error("Failed to fetch unread emails: " + e.getMessage()));
@@ -256,7 +278,7 @@ public class MailReceiveController {
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null) {
-                return ResponseEntity.badRequest()
+                return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
 
@@ -280,6 +302,11 @@ public class MailReceiveController {
 
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
+            if (isAuthenticationOrSessionError(e)) {
+                log.warn("Session/auth expired during sent fetch for {}: {}", userEmail, e.getMessage());
+                return ResponseEntity.status(401)
+                        .body(ApiResponse.error("Session expired or invalid credentials. Please login again."));
+            }
             log.error("CRITICAL error fetching sent emails for {}: {}", userEmail, e.getMessage(), e);
             return ResponseEntity.status(500)
                     .body(ApiResponse.error("Failed to fetch sent emails: " + e.getMessage()));
