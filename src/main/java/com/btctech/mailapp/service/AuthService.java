@@ -41,7 +41,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AuthService {
 
-    @Value("${spring.mail.username:${mail.from:${mail.smtp.from:beta@beta-softnet.com}}}")
+    @Value("${mail.from:${MAIL_FROM:${spring.mail.username:${SPRING_MAIL_USERNAME:beta@beta-softnet.com}}}}")
     private String mailFrom;
 
     @Value("${sms.provider.authkey:${SMS_PROVIDER_AUTHKEY:${sms.auth.key:}}}")
@@ -101,7 +101,8 @@ public class AuthService {
     private void sendParentOtpEmail(String toAddress, String otp) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("beta@beta-softnet.com");
+            String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "beta@beta-softnet.com";
+            message.setFrom(fromAddress);
             message.setTo(toAddress);
             message.setSubject("BNX Mail Parent Consent Verification");
             message.setText("Your verification code is: " + otp + "\nUse this code to verify your contact details and approve your child's BNX Mail account registration.\nThis code will expire in 15 minutes.");
@@ -572,13 +573,13 @@ public class AuthService {
     /**
      * Generate and send OTP to the selected recovery method
      */
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void sendRecoveryOtp(SendOtpRequest request) {
         User user = userService.getUserByEmailOrUsername(request.getIdentifier());
 
-        if ("EMAIL".equalsIgnoreCase(request.getMethod()) && user.getRecoveryEmail() == null) {
+        if ("EMAIL".equalsIgnoreCase(request.getMethod()) && (user.getRecoveryEmail() == null || user.getRecoveryEmail().trim().isEmpty())) {
             throw new MailException("No recovery email configured for this account");
-        } else if ("PHONE".equalsIgnoreCase(request.getMethod()) && user.getPhoneNumber() == null) {
+        } else if ("PHONE".equalsIgnoreCase(request.getMethod()) && (user.getPhoneNumber() == null || user.getPhoneNumber().trim().isEmpty())) {
             throw new MailException("No recovery phone configured for this account");
         }
 
@@ -618,16 +619,22 @@ public class AuthService {
             message.setFrom(fromAddress);
             message.setTo(toAddress.trim());
             message.setSubject("Your BNX Mail Password Reset OTP");
-            message.setText("Your OTP for password reset is: " + otp + "\nThis code will expire in 15 minutes.");
+            message.setText("Your OTP for password reset is: " + otp + "\nThis code will expire in 15 minutes.\n\nIf you did not request this code, please ignore this email or contact support.");
             
             javaMailSender.send(message);
             log.info("Sent recovery OTP email to masked recipient: {}", maskEmail(toAddress));
-        } catch (org.springframework.mail.MailException me) {
-            log.error("Failed to deliver OTP email via SMTP: {}", me.getMessage());
+        } catch (org.springframework.mail.MailAuthenticationException mae) {
+            log.error("SMTP Authentication failed: Check SMTP credentials. Details: {}", mae.getMessage());
+            throw new MailException("SMTP authentication failed. Please verify mail credentials or contact administrator.");
+        } catch (org.springframework.mail.MailSendException mse) {
+            log.error("Failed to deliver OTP email via SMTP: {}", mse.getMessage());
             throw new MailException("Failed to send OTP email via SMTP. Please check mail server configuration or try again later.");
+        } catch (org.springframework.mail.MailException me) {
+            log.error("Failed to send OTP email via Spring Mail: {}", me.getMessage());
+            throw new MailException("Failed to send OTP email via mail server. Please try again later.");
         } catch (Exception e) {
             log.error("Failed to send OTP email: {}", e.getMessage());
-            throw new MailException("Failed to send OTP email. Please try again later.");
+            throw new MailException("Failed to send OTP email: " + e.getMessage());
         }
     }
 
