@@ -41,16 +41,19 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AuthService {
 
-    @Value("${sms.provider.authkey:}")
+    @Value("${spring.mail.username:${mail.from:${mail.smtp.from:beta@beta-softnet.com}}}")
+    private String mailFrom;
+
+    @Value("${sms.provider.authkey:${SMS_PROVIDER_AUTHKEY:${sms.auth.key:}}}")
     private String smsAuthKey;
 
-    @Value("${sms.provider.templateId:}")
+    @Value("${sms.provider.templateId:${SMS_PROVIDER_TEMPLATEID:${sms.template.id:}}}")
     private String smsTemplateId;
 
-    @Value("${sms.provider.forgotPasswordTemplateId:}")
+    @Value("${sms.provider.forgotPasswordTemplateId:${SMS_PROVIDER_FORGOTPASSWORDTEMPLATEID:${sms.forgot.password.template.id:}}}")
     private String smsForgotPasswordTemplateId;
 
-    @Value("${sms.provider.senderId:}")
+    @Value("${sms.provider.senderId:${SMS_PROVIDER_SENDERID:${sms.sender.id:}}}")
     private String smsSenderId;
 
     private final java.util.Map<String, ParentOtpData> parentOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -605,43 +608,89 @@ public class AuthService {
     }
 
     private void sendOtpEmail(String toAddress, String otp) {
+        if (toAddress == null || toAddress.trim().isEmpty()) {
+            throw new MailException("No recovery email configured for this account");
+        }
+
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            message.setFrom("beta@beta-softnet.com");
-            message.setTo(toAddress);
+            String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "beta@beta-softnet.com";
+            message.setFrom(fromAddress);
+            message.setTo(toAddress.trim());
             message.setSubject("Your BNX Mail Password Reset OTP");
             message.setText("Your OTP for password reset is: " + otp + "\nThis code will expire in 15 minutes.");
+            
             javaMailSender.send(message);
-            log.info("Sent recovery OTP email to {}", toAddress);
+            log.info("Sent recovery OTP email to masked recipient: {}", maskEmail(toAddress));
+        } catch (org.springframework.mail.MailException me) {
+            log.error("Failed to deliver OTP email via SMTP: {}", me.getMessage());
+            throw new MailException("Failed to send OTP email via SMTP. Please check mail server configuration or try again later.");
         } catch (Exception e) {
-            log.error("Failed to send OTP email", e);
+            log.error("Failed to send OTP email: {}", e.getMessage());
             throw new MailException("Failed to send OTP email. Please try again later.");
         }
     }
 
+    /**
+     * Normalize Indian mobile numbers:
+     * - If 10 digits, prefix with country code '91'
+     * - If 11 digits starting with '0', replace '0' with '91'
+     * - If 12 digits starting with '91', keep as is (avoids duplicate country code)
+     */
+    private String normalizeMobileNumber(String mobileNumber) {
+        if (mobileNumber == null) {
+            return "";
+        }
+        String clean = mobileNumber.replaceAll("[^0-9]", "");
+        if (clean.length() == 10) {
+            return "91" + clean;
+        }
+        if (clean.length() == 11 && clean.startsWith("0")) {
+            return "91" + clean.substring(1);
+        }
+        if (clean.length() == 12 && clean.startsWith("91")) {
+            return clean;
+        }
+        return clean;
+    }
+
     private void sendOtpSms(String mobileNumber, String otp) {
-        if (smsForgotPasswordTemplateId == null || smsForgotPasswordTemplateId.isEmpty()) {
-            log.warn("Forgot Password SMS Template ID is not configured. Falling back to mock SMS.");
-            log.info("Mock SMS sent to {}: Your BNX Mail password reset OTP is {}", mobileNumber, otp);
-            return;
+        if (mobileNumber == null || mobileNumber.trim().isEmpty()) {
+            throw new MailException("No recovery phone configured for this account");
+        }
+
+        String cleanMobile = normalizeMobileNumber(mobileNumber);
+        if (cleanMobile.length() < 10) {
+            throw new MailException("Invalid phone number format. Please provide a valid 10-digit mobile number.");
+        }
+
+        if (smsForgotPasswordTemplateId == null || smsForgotPasswordTemplateId.trim().isEmpty()) {
+            log.error("MSG91 Delivery blocked: 'sms.provider.forgotPasswordTemplateId' is not configured.");
+            throw new MailException("SMS service is not configured. Please contact support or use Email recovery.");
+        }
+
+        if (smsAuthKey == null || smsAuthKey.trim().isEmpty()) {
+            log.error("MSG91 Delivery blocked: 'sms.provider.authkey' is not configured.");
+            throw new MailException("SMS service authentication is not configured. Please contact support or use Email recovery.");
         }
 
         try {
             RestTemplate restTemplate = new RestTemplate();
-            
-            // Clean mobile number
-            String cleanMobile = mobileNumber.replaceAll("[^0-9]", "");
-            
             String url = "https://control.msg91.com/api/v5/flow";
 
             HttpHeaders headers = new HttpHeaders();
-            headers.set("authkey", smsAuthKey);
+            headers.set("authkey", smsAuthKey.trim());
             headers.set("Accept", "application/json");
             headers.set("Content-Type", "application/json");
 
+            String senderField = (smsSenderId != null && !smsSenderId.trim().isEmpty())
+                    ? "  \"sender\": \"" + smsSenderId.trim() + "\",\n"
+                    : "";
+
             String requestBody = "{\n" +
-                    "  \"template_id\": \"" + smsForgotPasswordTemplateId + "\",\n" +
+                    "  \"template_id\": \"" + smsForgotPasswordTemplateId.trim() + "\",\n" +
                     "  \"short_url\": \"0\",\n" +
+                    senderField +
                     "  \"recipients\": [\n" +
                     "    {\n" +
                     "      \"mobiles\": \"" + cleanMobile + "\",\n" +
@@ -659,20 +708,32 @@ public class AuthService {
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
             
             String responseBody = response.getBody();
-            log.info("MSG91 Response for Forgot Password: {}", responseBody);
+            log.info("MSG91 API response status: {}", response.getStatusCode());
             
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             if (responseBody != null) {
                 com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
                 if (root.has("type") && "error".equalsIgnoreCase(root.get("type").asText())) {
                     String errorMessage = root.has("message") ? root.get("message").asText() : "Unknown MSG91 Error";
+                    log.error("MSG91 rejected OTP SMS delivery: {}", errorMessage);
                     throw new MailException("Failed to send OTP SMS: " + errorMessage);
                 }
             }
+            log.info("✓ OTP SMS successfully dispatched via MSG91 to masked recipient: {}", maskPhone(mobileNumber));
         } catch (MailException me) {
             throw me;
+        } catch (org.springframework.web.client.HttpStatusCodeException httpEx) {
+            log.error("MSG91 HTTP error: status {}", httpEx.getStatusCode());
+            String errorMsg = "SMS delivery failed";
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(httpEx.getResponseBodyAsString());
+                if (root.has("message")) {
+                    errorMsg = root.get("message").asText();
+                }
+            } catch (Exception ignored) {}
+            throw new MailException("Failed to send OTP SMS: " + errorMsg);
         } catch (Exception e) {
-            log.error("Failed to send OTP SMS", e);
+            log.error("Failed to send OTP SMS: {}", e.getMessage());
             throw new MailException("Failed to send OTP SMS. Please try again later.");
         }
     }
@@ -708,7 +769,8 @@ public class AuthService {
     }
 
     /**
-     * standalone verification of OTP
+     * Standalone verification of OTP without consuming it,
+     * so that the subsequent resetPassword step can complete.
      */
     public void verifyOtp(String identifier, String otp) {
         User user = userService.getUserByEmailOrUsername(identifier);
@@ -721,9 +783,16 @@ public class AuthService {
             throw new MailException("OTP has expired");
         }
         
-        // Delete token immediately to ensure single-use and prevent replay
-        passwordResetTokenRepository.delete(token);
         log.info("✓ OTP verified successfully for: {}", identifier);
+    }
+
+    /**
+     * Consume and delete OTP token (used for 2FA bypass recovery)
+     */
+    public void consumeOtp(String identifier, String otp) {
+        User user = userService.getUserByEmailOrUsername(identifier);
+        passwordResetTokenRepository.findByUserAndToken(user, otp)
+                .ifPresent(passwordResetTokenRepository::delete);
     }
 
     private final com.btctech.mailapp.repository.ExternalAppSessionRepository externalAppSessionRepository;

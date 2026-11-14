@@ -703,6 +703,7 @@ public class AuthController {
             
             // 1. Verify OTP
             authService.verifyOtp(email, otp);
+            authService.consumeOtp(email, otp);
             
             // 2. OTP is valid! Proceed with login (Bypass 2FA)
             User user = userService.getUserByEmailOrUsername(email);
