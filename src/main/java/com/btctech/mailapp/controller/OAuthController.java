@@ -38,19 +38,28 @@ public class OAuthController {
         String token = authHeader.substring(7);
         String email = jwtUtil.extractEmail(token);
 
-        log.info("Generating auth code for client: {} and user: {}", request.getClientId(), email);
+        log.info("Generating auth code for client: {} and user: {}, redirectUri: {}",
+                request.getClientId(), email, request.getRedirectUri());
 
-        String code = oAuthService.generateAuthorizationCode(
-                request.getClientId(),
-                request.getRedirectUri(),
-                email
-        );
+        try {
+            String code = oAuthService.generateAuthorizationCode(
+                    request.getClientId(),
+                    request.getRedirectUri(),
+                    email
+            );
 
-        Map<String, String> data = new HashMap<>();
-        data.put("code", code);
-        data.put("state", request.getState());
+            Map<String, String> data = new HashMap<>();
+            data.put("code", code);
+            data.put("state", request.getState());
 
-        return ResponseEntity.ok(ApiResponse.success(data, "Authorization code generated"));
+            return ResponseEntity.ok(ApiResponse.success(data, "Authorization code generated"));
+        } catch (IllegalArgumentException | IllegalStateException ex) {
+            log.warn("OAuth authorization failed for client {}: {}", request.getClientId(), ex.getMessage());
+            return ResponseEntity.badRequest().body(ApiResponse.error(ex.getMessage()));
+        } catch (RuntimeException ex) {
+            log.error("OAuth authorization error for client {}: {}", request.getClientId(), ex.getMessage());
+            return ResponseEntity.badRequest().body(ApiResponse.error(ex.getMessage()));
+        }
     }
 
     /**

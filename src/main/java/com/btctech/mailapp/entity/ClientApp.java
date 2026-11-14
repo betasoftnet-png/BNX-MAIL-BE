@@ -26,7 +26,7 @@ public class ClientApp {
     @Column(nullable = false)
     private String appName;
 
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "TEXT")
     private String redirectUri;
 
     @Column(name = "created_at")

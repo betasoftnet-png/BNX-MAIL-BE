@@ -21,7 +21,7 @@ public class ClientSeedConfig {
             clientAppRepository.findByClientId("kinsword").ifPresentOrElse(
                 client -> {
                     log.info("Updating test OAuth client redirect URI...");
-                    client.setRedirectUri("https://www.kinsword.com");
+                    client.setRedirectUri("https://www.kinsword.com,https://kinsword.com,https://www.kinsword.com/,https://kinsword.com/,https://www.kinsword.com/auth,https://kinsword.com/auth,http://www.kinsword.com,http://kinsword.com,http://localhost:3000,http://localhost:5173");
                     clientAppRepository.save(client);
                 },
                 () -> {
@@ -30,7 +30,7 @@ public class ClientSeedConfig {
                             .clientId("kinsword")
                             .clientSecret("secure-test-secret-2026")
                             .appName("KINSWORD")
-                            .redirectUri("https://www.kinsword.com")
+                            .redirectUri("https://www.kinsword.com,https://kinsword.com,https://www.kinsword.com/,https://kinsword.com/,https://www.kinsword.com/auth,https://kinsword.com/auth,http://www.kinsword.com,http://kinsword.com,http://localhost:3000,http://localhost:5173")
                             .build();
                     clientAppRepository.save(client);
                     log.info("Test OAuth client seeded: kinsword");
@@ -40,7 +40,7 @@ public class ClientSeedConfig {
             clientAppRepository.findByClientId("cliks-app").ifPresentOrElse(
                 client -> {
                     log.info("Updating cliks-app OAuth client redirect URI...");
-                    client.setRedirectUri("https://cliks.beta-softnet.com/auth,https://cliks.beta-softnet.com,https://cliks.beta-softnet.com/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/");
+                    client.setRedirectUri("https://cliks.beta-softnet.com/auth,https://cliks.beta-softnet.com,https://cliks.beta-softnet.com/,https://www.cliks.beta-softnet.com/auth,https://www.cliks.beta-softnet.com,https://www.cliks.beta-softnet.com/,http://cliks.beta-softnet.com/auth,http://cliks.beta-softnet.com,http://cliks.beta-softnet.com/,http://www.cliks.beta-softnet.com/auth,http://www.cliks.beta-softnet.com,http://www.cliks.beta-softnet.com/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/,http://localhost:5173/auth,http://localhost:5173,http://localhost:3000/auth,http://localhost:3000");
                     clientAppRepository.save(client);
                 },
                 () -> {
@@ -49,7 +49,7 @@ public class ClientSeedConfig {
                             .clientId("cliks-app")
                             .clientSecret("secure-cliks-secret-2026")
                             .appName("Cliks")
-                            .redirectUri("https://cliks.beta-softnet.com/auth,https://cliks.beta-softnet.com,https://cliks.beta-softnet.com/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/")
+                            .redirectUri("https://cliks.beta-softnet.com/auth,https://cliks.beta-softnet.com,https://cliks.beta-softnet.com/,https://www.cliks.beta-softnet.com/auth,https://www.cliks.beta-softnet.com,https://www.cliks.beta-softnet.com/,http://cliks.beta-softnet.com/auth,http://cliks.beta-softnet.com,http://cliks.beta-softnet.com/,http://www.cliks.beta-softnet.com/auth,http://www.cliks.beta-softnet.com,http://www.cliks.beta-softnet.com/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth,http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/auth/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth,http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/auth/,http://localhost:5173/auth,http://localhost:5173,http://localhost:3000/auth,http://localhost:3000")
                             .build();
                     clientAppRepository.save(client);
                     log.info("Test OAuth client seeded: cliks-app");
@@ -59,7 +59,7 @@ public class ClientSeedConfig {
             clientAppRepository.findByClientId("cliks-business").ifPresentOrElse(
                 client -> {
                     log.info("Updating cliks-business OAuth client redirect URI...");
-                    client.setRedirectUri("https://cliksbusiness.com/");
+                    client.setRedirectUri("https://cliksbusiness.com/,https://cliksbusiness.com,https://www.cliksbusiness.com/,https://www.cliksbusiness.com,https://cliksbusiness.com/auth,https://www.cliksbusiness.com/auth,http://cliksbusiness.com/,http://cliksbusiness.com,http://localhost:3000,http://localhost:5173");
                     clientAppRepository.save(client);
                 },
                 () -> {
@@ -68,7 +68,7 @@ public class ClientSeedConfig {
                             .clientId("cliks-business")
                             .clientSecret("secure-cliks-biz-secret-2026")
                             .appName("Cliks Business")
-                            .redirectUri("https://cliksbusiness.com/")
+                            .redirectUri("https://cliksbusiness.com/,https://cliksbusiness.com,https://www.cliksbusiness.com/,https://www.cliksbusiness.com,https://cliksbusiness.com/auth,https://www.cliksbusiness.com/auth,http://cliksbusiness.com/,http://cliksbusiness.com,http://localhost:3000,http://localhost:5173")
                             .build();
                     clientAppRepository.save(client);
                     log.info("Test OAuth client seeded: cliks-business");

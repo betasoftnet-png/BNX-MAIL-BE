@@ -4,12 +4,15 @@ import com.btctech.mailapp.config.JwtUtil;
 import com.btctech.mailapp.entity.ClientApp;
 import com.btctech.mailapp.repository.ClientAppRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OAuthService {
@@ -31,7 +34,9 @@ public class OAuthService {
         boolean match = isRedirectUriMatch(configuredUri, redirectUri);
 
         if (!match) {
-            throw new RuntimeException("Invalid redirect_uri");
+            log.error("OAuth redirect URI validation failed for client '{}'. Incoming: '{}', Configured: '{}'",
+                    clientId, redirectUri, configuredUri);
+            throw new RuntimeException("Invalid redirect_uri: " + redirectUri);
         }
 
         String code = UUID.randomUUID().toString();
@@ -151,26 +156,97 @@ public class OAuthService {
         if (configuredUri == null || incomingUri == null) {
             return false;
         }
-        String incomingClean = incomingUri.trim();
-        String incomingStripped = stripSlash(incomingClean);
 
-        if (configuredUri.equals(incomingClean) || stripSlash(configuredUri).equalsIgnoreCase(incomingStripped)) {
-            return true;
-        }
-        if (configuredUri.contains(",")) {
-            for (String uri : configuredUri.split(",")) {
-                String clean = uri.trim();
-                if (clean.equals(incomingClean) || stripSlash(clean).equalsIgnoreCase(incomingStripped)) {
-                    return true;
-                }
+        // 1. URL-decode if incoming contains percent-encoded characters
+        String cleanIncoming = incomingUri.trim();
+        try {
+            if (cleanIncoming.contains("%3A") || cleanIncoming.contains("%3a") ||
+                cleanIncoming.contains("%2F") || cleanIncoming.contains("%2f")) {
+                cleanIncoming = java.net.URLDecoder.decode(cleanIncoming, java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (Exception ignored) {}
+
+        List<String> configuredList = java.util.Arrays.stream(configuredUri.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(java.util.stream.Collectors.toList());
+
+        for (String conf : configuredList) {
+            if (matchSingleUri(conf, cleanIncoming) || matchSingleUri(conf, incomingUri.trim())) {
+                return true;
             }
         }
+        return false;
+    }
+
+    private boolean matchSingleUri(String conf, String incoming) {
+        if (conf == null || incoming == null) return false;
+
+        // Exact match
+        if (conf.equalsIgnoreCase(incoming)) return true;
+
+        // Trailing slash stripped match
+        String confNoSlash = stripSlash(conf);
+        String incNoSlash = stripSlash(incoming);
+        if (confNoSlash.equalsIgnoreCase(incNoSlash)) return true;
+
+        // Query params and hash fragment stripped match
+        String confNoQuery = stripQueryAndFragment(confNoSlash);
+        String incNoQuery = stripQueryAndFragment(incNoSlash);
+        if (confNoQuery.equalsIgnoreCase(incNoQuery)) return true;
+
+        // Protocol-agnostic match (http vs https)
+        String confNoProto = confNoQuery.replaceFirst("(?i)^https?://", "");
+        String incNoProto = incNoQuery.replaceFirst("(?i)^https?://", "");
+        if (confNoProto.equalsIgnoreCase(incNoProto)) return true;
+
+        // www-agnostic match
+        String confNoWww = confNoProto.replaceFirst("(?i)^www\\.", "");
+        String incNoWww = incNoProto.replaceFirst("(?i)^www\\.", "");
+        if (confNoWww.equalsIgnoreCase(incNoWww)) return true;
+
+        // Origin / Host match with flexible path
+        try {
+            java.net.URI confUri = java.net.URI.create(conf.matches("(?i)^https?://.*") ? conf : "http://" + conf);
+            java.net.URI incUri = java.net.URI.create(incoming.matches("(?i)^https?://.*") ? incoming : "http://" + incoming);
+
+            String confHost = confUri.getHost();
+            String incHost = incUri.getHost();
+            if (confHost != null && incHost != null) {
+                String cHostNorm = confHost.replaceFirst("(?i)^www\\.", "");
+                String iHostNorm = incHost.replaceFirst("(?i)^www\\.", "");
+                if (cHostNorm.equalsIgnoreCase(iHostNorm)) {
+                    String cPath = confUri.getPath() != null ? stripSlash(confUri.getPath()) : "";
+                    String iPath = incUri.getPath() != null ? stripSlash(incUri.getPath()) : "";
+
+                    if (cPath.isEmpty() || cPath.equalsIgnoreCase(iPath)) {
+                        return true;
+                    }
+                    if (cPath.equalsIgnoreCase("/auth") && (iPath.isEmpty() || iPath.equalsIgnoreCase("/auth") || iPath.startsWith("/auth/"))) {
+                        return true;
+                    }
+                    if (iPath.equalsIgnoreCase("/auth") && (cPath.isEmpty() || cPath.equalsIgnoreCase("/auth") || cPath.startsWith("/auth/"))) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
         return false;
     }
 
     private String stripSlash(String uri) {
         if (uri == null) return "";
         return uri.trim().replaceAll("/+$", "");
+    }
+
+    private String stripQueryAndFragment(String uri) {
+        if (uri == null) return "";
+        int q = uri.indexOf('?');
+        if (q != -1) uri = uri.substring(0, q);
+        int h = uri.indexOf('#');
+        if (h != -1) uri = uri.substring(0, h);
+        return uri.trim();
     }
 
     private static record AuthCodeData(String clientId, String email, long expiry) {}

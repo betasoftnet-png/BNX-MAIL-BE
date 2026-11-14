@@ -32,9 +32,11 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // CORS preflight OPTIONS requests must always be permitted
+                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
                         // Public endpoints (no authentication)
                         .requestMatchers("/api/users/profile-picture/**").permitAll()
-                        .requestMatchers("/api/auth/register", "/api/auth/login/**", "/api/auth/refresh", "/api/auth/forgot-password/**", "/api/auth/reset-password", "/api/auth/username-suggestions", "/api/auth/child/**", "/api/auth/system-status", "/api/auth/appeal", "/api/auth/verify-business", "/api/auth/send-mobile-otp", "/api/auth/verify-mobile-otp", "/api/auth/fetch-gstins").permitAll()
+                        .requestMatchers("/api/auth/register", "/api/auth/login", "/api/auth/login/**", "/api/auth/refresh", "/api/auth/forgot-password/**", "/api/auth/reset-password", "/api/auth/username-suggestions", "/api/auth/child/**", "/api/auth/system-status", "/api/auth/appeal", "/api/auth/verify-business", "/api/auth/send-mobile-otp", "/api/auth/verify-mobile-otp", "/api/auth/fetch-gstins").permitAll()
                         .requestMatchers("/api/verification/status/**", "/api/verification/webhook").permitAll()
                         .requestMatchers("/api/oauth/token", "/api/oauth/check-session", "/api/oauth/introspect", "/api/oauth/revoke").permitAll() // ✅ OAuth endpoints
                         .requestMatchers("/api/webhooks/incoming-mail").permitAll() // ✅ Webhook
