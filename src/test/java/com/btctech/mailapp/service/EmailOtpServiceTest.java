@@ -341,4 +341,77 @@ class EmailOtpServiceTest {
         assertEquals("javax.net.ssl.SSLSocketFactory", props.getProperty("mail.smtp.socketFactory.class"));
         assertEquals("*", props.getProperty("mail.smtp.ssl.trust"));
     }
+
+    @Test
+    @DisplayName("13. getRecoveryOptions returns 200 payload with masked Gmail for registered Gmail user")
+    void testGetRecoveryOptions_RegisteredGmail_Success() {
+        User gmailUser = new User();
+        gmailUser.setId(200L);
+        gmailUser.setUsername("dilliprasath1225");
+        gmailUser.setEmail("dilliprasath1225@gmail.com");
+        gmailUser.setRecoveryEmail("dilliprasath1225@gmail.com");
+        gmailUser.setPhoneNumber("9876543210");
+
+        when(userService.getUserByEmailOrUsername("dilliprasath1225@gmail.com")).thenReturn(gmailUser);
+
+        RecoveryOptionsResponse options = authService.getRecoveryOptions("dilliprasath1225@gmail.com");
+
+        assertNotNull(options);
+        assertNotNull(options.getRecoveryEmail());
+        assertTrue(options.getRecoveryEmail().endsWith("@gmail.com"));
+        assertEquals("d***5@gmail.com", options.getRecoveryEmail());
+        assertEquals("*******210", options.getPhoneNumber());
+    }
+
+    @Test
+    @DisplayName("14. sendRecoveryOtp delivers OTP specifically to registered Gmail address entered by user")
+    void testSendRecoveryOtp_RegisteredGmail_DirectDelivery() {
+        User gmailUser = new User();
+        gmailUser.setId(200L);
+        gmailUser.setUsername("dilliprasath1225");
+        gmailUser.setEmail("dilliprasath1225@gmail.com");
+        gmailUser.setPhoneNumber("9876543210");
+
+        when(userService.getUserByEmailOrUsername("dilliprasath1225@gmail.com")).thenReturn(gmailUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("dilliprasath1225@gmail.com");
+        request.setMethod("EMAIL");
+
+        authService.sendRecoveryOtp(request);
+
+        ArgumentCaptor<SimpleMailMessage> msgCaptor = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(msgCaptor.capture());
+        SimpleMailMessage sentMsg = msgCaptor.getValue();
+        assertEquals("dilliprasath1225@gmail.com", sentMsg.getTo()[0]);
+    }
+
+    @Test
+    @DisplayName("15. sendRecoveryOtp handles identifier with surrounding whitespace correctly")
+    void testSendRecoveryOtp_WhitespaceIdentifier_HandledCleanly() {
+        User gmailUser = new User();
+        gmailUser.setId(200L);
+        gmailUser.setUsername("dilliprasath1225");
+        gmailUser.setEmail("dilliprasath1225@gmail.com");
+
+        when(userService.getUserByEmailOrUsername("dilliprasath1225@gmail.com")).thenReturn(gmailUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("   dilliprasath1225@gmail.com   ");
+        request.setMethod("EMAIL");
+
+        authService.sendRecoveryOtp(request);
+
+        ArgumentCaptor<SimpleMailMessage> msgCaptor = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(javaMailSender).send(msgCaptor.capture());
+        SimpleMailMessage sentMsg = msgCaptor.getValue();
+        assertEquals("dilliprasath1225@gmail.com", sentMsg.getTo()[0]);
+    }
+
+    @Test
+    @DisplayName("16. getRecoveryOptions throws MailException (HTTP 400) when identifier is blank")
+    void testGetRecoveryOptions_BlankIdentifier_ThrowsMailException() {
+        assertThrows(MailException.class, () -> authService.getRecoveryOptions("   "));
+        assertThrows(MailException.class, () -> authService.getRecoveryOptions(null));
+    }
 }

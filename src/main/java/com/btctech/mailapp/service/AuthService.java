@@ -571,11 +571,24 @@ public class AuthService {
      * Get masked recovery options for the user
      */
     public RecoveryOptionsResponse getRecoveryOptions(String identifier) {
-        User user = userService.getUserByEmailOrUsername(identifier);
+        if (identifier == null || identifier.trim().isEmpty()) {
+            throw new MailException("Identifier is required");
+        }
+        String cleanId = identifier.trim();
+        User user = userService.getUserByEmailOrUsername(cleanId);
 
-        String emailToUse = (user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty())
-                ? user.getRecoveryEmail().trim()
-                : (user.getEmail() != null && !user.getEmail().trim().isEmpty() ? user.getEmail().trim() : null);
+        String emailToUse = null;
+        if (cleanId.equalsIgnoreCase(user.getRecoveryEmail())) {
+            emailToUse = user.getRecoveryEmail().trim();
+        } else if (cleanId.equalsIgnoreCase(user.getEmail()) && !cleanId.toLowerCase().endsWith("@bnxmail.com")) {
+            emailToUse = user.getEmail().trim();
+        } else if (user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty()) {
+            emailToUse = user.getRecoveryEmail().trim();
+        } else if (user.getEmail() != null && !user.getEmail().trim().isEmpty()) {
+            emailToUse = user.getEmail().trim();
+        } else if (cleanId.contains("@")) {
+            emailToUse = cleanId;
+        }
 
         return RecoveryOptionsResponse.builder()
                 .recoveryEmail(maskEmail(emailToUse))
@@ -588,16 +601,24 @@ public class AuthService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void sendRecoveryOtp(SendOtpRequest request) {
-        User user = userService.getUserByEmailOrUsername(request.getIdentifier());
+        if (request == null || request.getIdentifier() == null || request.getIdentifier().trim().isEmpty()) {
+            throw new MailException("Identifier is required");
+        }
+        String cleanId = request.getIdentifier().trim();
+        User user = userService.getUserByEmailOrUsername(cleanId);
 
         String recipientEmail = null;
         if ("EMAIL".equalsIgnoreCase(request.getMethod())) {
-            if (user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty()) {
+            if (cleanId.equalsIgnoreCase(user.getRecoveryEmail())) {
+                recipientEmail = user.getRecoveryEmail().trim();
+            } else if (cleanId.equalsIgnoreCase(user.getEmail()) && !cleanId.toLowerCase().endsWith("@bnxmail.com")) {
+                recipientEmail = user.getEmail().trim();
+            } else if (user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty()) {
                 recipientEmail = user.getRecoveryEmail().trim();
             } else if (user.getEmail() != null && !user.getEmail().trim().isEmpty()) {
                 recipientEmail = user.getEmail().trim();
-            } else if (request.getIdentifier() != null && request.getIdentifier().contains("@")) {
-                recipientEmail = request.getIdentifier().trim();
+            } else if (cleanId.contains("@")) {
+                recipientEmail = cleanId;
             }
 
             if (recipientEmail == null || recipientEmail.isEmpty()) {
@@ -788,9 +809,13 @@ public class AuthService {
      */
     @Transactional
     public void resetPassword(ResetPasswordRequest request) {
-        User user = userService.getUserByEmailOrUsername(request.getIdentifier());
+        if (request == null || request.getIdentifier() == null || request.getIdentifier().trim().isEmpty()) {
+            throw new MailException("Identifier is required");
+        }
+        String cleanId = request.getIdentifier().trim();
+        User user = userService.getUserByEmailOrUsername(cleanId);
 
-        PasswordResetToken token = passwordResetTokenRepository.findByUserAndToken(user, request.getOtp())
+        PasswordResetToken token = passwordResetTokenRepository.findByUserAndToken(user, request.getOtp() != null ? request.getOtp().trim() : "")
                 .orElseThrow(() -> new MailException("Invalid OTP"));
 
         if (token.isExpired()) {
@@ -822,9 +847,13 @@ public class AuthService {
      * so that the subsequent resetPassword step can complete.
      */
     public void verifyOtp(String identifier, String otp) {
-        User user = userService.getUserByEmailOrUsername(identifier);
+        if (identifier == null || identifier.trim().isEmpty()) {
+            throw new MailException("Identifier is required");
+        }
+        String cleanId = identifier.trim();
+        User user = userService.getUserByEmailOrUsername(cleanId);
 
-        PasswordResetToken token = passwordResetTokenRepository.findByUserAndToken(user, otp)
+        PasswordResetToken token = passwordResetTokenRepository.findByUserAndToken(user, otp != null ? otp.trim() : "")
                 .orElseThrow(() -> new MailException("Invalid OTP"));
 
         if (token.isExpired()) {
@@ -832,15 +861,17 @@ public class AuthService {
             throw new MailException("OTP has expired");
         }
         
-        log.info("✓ OTP verified successfully for: {}", identifier);
+        log.info("✓ OTP verified successfully for: {}", cleanId);
     }
 
     /**
      * Consume and delete OTP token (used for 2FA bypass recovery)
      */
     public void consumeOtp(String identifier, String otp) {
-        User user = userService.getUserByEmailOrUsername(identifier);
-        passwordResetTokenRepository.findByUserAndToken(user, otp)
+        if (identifier == null || identifier.trim().isEmpty()) return;
+        String cleanId = identifier.trim();
+        User user = userService.getUserByEmailOrUsername(cleanId);
+        passwordResetTokenRepository.findByUserAndToken(user, otp != null ? otp.trim() : "")
                 .ifPresent(passwordResetTokenRepository::delete);
     }
 

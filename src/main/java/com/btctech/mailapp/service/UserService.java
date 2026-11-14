@@ -20,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.Period;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import com.btctech.mailapp.strategy.RegistrationStrategy;
@@ -274,29 +275,61 @@ public class UserService {
      * Get user by email
      */
     public User getUserByEmail(String email) {
-        return userRepository.findByEmail(email)
-                .orElseThrow(() -> new MailException("User not found"));
+        if (email == null || email.trim().isEmpty()) {
+            throw new MailException("Email is required");
+        }
+        String cleanEmail = email.trim();
+        return userRepository.findFirstByEmailIgnoreCase(cleanEmail)
+                .or(() -> userRepository.findFirstByRecoveryEmailIgnoreCase(cleanEmail))
+                .or(() -> userRepository.findByMailAccountEmailIgnoreCase(cleanEmail))
+                .or(() -> userRepository.findByEmail(cleanEmail))
+                .orElseThrow(() -> new MailException("User not found: " + cleanEmail));
     }
 
     /**
      * Get user by email or username
-     * This handles cases where the token subject could be a username (temp token)
-     * or email
+     * This handles cases where the identifier is a username, personal email, recovery email,
+     * or mail account address.
      */
     public User getUserByEmailOrUsername(String identifier) {
-        if (identifier.contains("@")) {
-            try {
-                return getUserByEmail(identifier);
-            } catch (MailException e) {
-                // FALLBACK: Check if this email belongs to any MailAccount
-                return mailAccountRepository.findByEmail(identifier)
-                        .map(ma -> userRepository.findById(ma.getUserId())
-                                .orElseThrow(() -> new MailException("User not found for this mail account")))
-                        .orElseThrow(() -> new MailException("User not found: " + identifier));
-            }
-        } else {
-            return getUserByUsername(identifier);
+        if (identifier == null || identifier.trim().isEmpty()) {
+            throw new MailException("Identifier is required");
         }
+        String cleanId = identifier.trim();
+
+        // 1. Direct match on User.email, User.recoveryEmail, or User.username (case-insensitive)
+        List<User> directMatches = userRepository.findByIdentifierIgnoreCase(cleanId);
+        if (!directMatches.isEmpty()) {
+            return directMatches.get(0);
+        }
+
+        // 2. Match on MailAccount email (e.g. user@bnxmail.com)
+        Optional<User> maUser = userRepository.findByMailAccountEmailIgnoreCase(cleanId);
+        if (maUser.isPresent()) {
+            return maUser.get();
+        }
+
+        // 3. Fallback for MailAccount repository if needed
+        Optional<MailAccount> mailAccountOpt = mailAccountRepository.findByEmail(cleanId);
+        if (mailAccountOpt.isPresent()) {
+            Optional<User> userFromMa = userRepository.findById(mailAccountOpt.get().getUserId());
+            if (userFromMa.isPresent()) {
+                return userFromMa.get();
+            }
+        }
+
+        // 4. If identifier contains '@', check if the username part matches User.username
+        if (cleanId.contains("@")) {
+            String usernamePart = cleanId.substring(0, cleanId.indexOf('@')).trim();
+            if (!usernamePart.isEmpty()) {
+                Optional<User> userByUsername = userRepository.findByUsernameIgnoreCase(usernamePart);
+                if (userByUsername.isPresent()) {
+                    return userByUsername.get();
+                }
+            }
+        }
+
+        throw new MailException("User not found: " + cleanId);
     }
 
     /**

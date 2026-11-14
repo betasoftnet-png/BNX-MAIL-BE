@@ -575,8 +575,9 @@ public class AuthController {
     @GetMapping("/forgot-password/options")
     public ResponseEntity<ApiResponse<RecoveryOptionsResponse>> getRecoveryOptions(
             @RequestParam String identifier) {
-        log.info("Fetching recovery options for: {}", identifier);
-        RecoveryOptionsResponse options = authService.getRecoveryOptions(identifier);
+        String cleanId = identifier != null ? identifier.trim() : "";
+        log.info("Fetching recovery options for: {}", cleanId);
+        RecoveryOptionsResponse options = authService.getRecoveryOptions(cleanId);
         return ResponseEntity.ok(ApiResponse.success(options, "Recovery options retrieved successfully"));
     }
 
