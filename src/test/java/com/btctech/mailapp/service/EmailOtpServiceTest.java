@@ -74,6 +74,9 @@ class EmailOtpServiceTest {
 
         ReflectionTestUtils.setField(authService, "mailFrom", "noreply@bnxmail.com");
         ReflectionTestUtils.setField(authService, "smtpHost", "smtp.provider.com");
+        ReflectionTestUtils.setField(authService, "smtpUsername", "noreply@bnxmail.com");
+        ReflectionTestUtils.setField(authService, "smtpPassword", "secret");
+        ReflectionTestUtils.setField(authService, "smtpAuth", true);
 
         testUser = new User();
         testUser.setId(100L);
@@ -180,6 +183,23 @@ class EmailOtpServiceTest {
     @DisplayName("5. sendRecoveryOtp throws clear configuration error when SMTP host is missing or localhost")
     void testSendRecoveryOtp_MissingSmtpConfig_ThrowsConfigurationException() {
         ReflectionTestUtils.setField(authService, "smtpHost", "localhost");
+        when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
+
+        SendOtpRequest request = new SendOtpRequest();
+        request.setIdentifier("testuser");
+        request.setMethod("EMAIL");
+
+        MailException ex = assertThrows(MailException.class, () -> authService.sendRecoveryOtp(request));
+        assertTrue(ex.getMessage().contains("SMTP configuration is missing"));
+        verifyNoInteractions(javaMailSender);
+    }
+
+    @Test
+    @DisplayName("5b. sendRecoveryOtp throws clear configuration error when SMTP credentials are missing")
+    void testSendRecoveryOtp_MissingCredentials_ThrowsConfigurationException() {
+        ReflectionTestUtils.setField(authService, "smtpHost", "smtp.provider.com");
+        ReflectionTestUtils.setField(authService, "smtpUsername", "");
+        ReflectionTestUtils.setField(authService, "smtpPassword", "");
         when(userService.getUserByEmailOrUsername("testuser")).thenReturn(testUser);
 
         SendOtpRequest request = new SendOtpRequest();

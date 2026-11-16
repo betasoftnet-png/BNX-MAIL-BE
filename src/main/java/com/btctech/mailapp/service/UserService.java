@@ -299,6 +299,9 @@ public class UserService {
 
         // 1. Direct match on User.email, User.recoveryEmail, or User.username (case-insensitive)
         List<User> directMatches = userRepository.findByIdentifierIgnoreCase(cleanId);
+        if (directMatches.isEmpty() && !cleanId.equals(cleanId.toLowerCase())) {
+            directMatches = userRepository.findByIdentifierIgnoreCase(cleanId.toLowerCase());
+        }
         if (!directMatches.isEmpty()) {
             return directMatches.get(0);
         }

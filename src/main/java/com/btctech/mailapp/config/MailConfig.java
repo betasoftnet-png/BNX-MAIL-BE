@@ -26,22 +26,22 @@ public class MailConfig {
     @Value("${spring.mail.password:${SPRING_MAIL_PASSWORD:${mail.smtp.password:${SMTP_PASSWORD:}}}}")
     private String password;
 
-    @Value("${spring.mail.properties.mail.smtp.auth:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:${mail.smtp.auth:true}}}")
+    @Value("${spring.mail.properties.mail.smtp.auth:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:${SPRING_MAIL_AUTH:${mail.smtp.auth:${SMTP_AUTH:true}}}}}")
     private boolean auth;
 
-    @Value("${spring.mail.properties.mail.smtp.starttls.enable:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE:${mail.smtp.starttls.enable:true}}}")
+    @Value("${spring.mail.properties.mail.smtp.starttls.enable:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE:${SPRING_MAIL_STARTTLS_ENABLE:${SPRING_MAIL_STARTTLS:${mail.smtp.starttls.enable:${SMTP_STARTTLS:true}}}}}}")
     private boolean starttls;
 
     @Value("${spring.mail.properties.mail.smtp.starttls.required:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED:false}}")
     private boolean starttlsRequired;
 
-    @Value("${spring.mail.properties.mail.smtp.ssl.enable:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE:${mail.smtp.ssl.enable:false}}}")
+    @Value("${spring.mail.properties.mail.smtp.ssl.enable:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE:${SPRING_MAIL_SSL_ENABLE:${SPRING_MAIL_SSL:${mail.smtp.ssl.enable:${SMTP_SSL:false}}}}}}")
     private boolean ssl;
 
-    @Value("${spring.mail.properties.mail.smtp.ssl.trust:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST:*}}")
+    @Value("${spring.mail.properties.mail.smtp.ssl.trust:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_TRUST:${SMTP_SSL_TRUST:*}}}")
     private String sslTrust;
 
-    @Value("${spring.mail.protocol:smtp}")
+    @Value("${spring.mail.protocol:${SPRING_MAIL_PROTOCOL:smtp}}")
     private String protocol;
 
     @Bean

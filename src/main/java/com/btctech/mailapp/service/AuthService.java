@@ -41,16 +41,31 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AuthService {
 
-    @Value("${mail.from:${MAIL_FROM:${spring.mail.username:${SPRING_MAIL_USERNAME:beta@beta-softnet.com}}}}")
+    @Value("${spring.mail.from:${SPRING_MAIL_FROM:${mail.from:${MAIL_FROM:${spring.mail.username:${SPRING_MAIL_USERNAME:noreply@bnxmail.com}}}}}}")
     private String mailFrom;
 
     @Value("${spring.mail.host:${SPRING_MAIL_HOST:${mail.smtp.host:${SMTP_HOST:}}}}")
     private String smtpHost;
 
+    @Value("${spring.mail.username:${SPRING_MAIL_USERNAME:${mail.smtp.username:${SMTP_USERNAME:}}}}")
+    private String smtpUsername;
+
+    @Value("${spring.mail.password:${SPRING_MAIL_PASSWORD:${mail.smtp.password:${SMTP_PASSWORD:}}}}")
+    private String smtpPassword;
+
+    @Value("${spring.mail.properties.mail.smtp.auth:${SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:${SPRING_MAIL_AUTH:${mail.smtp.auth:${SMTP_AUTH:true}}}}}")
+    private boolean smtpAuth;
+
     private boolean isSmtpConfigMissing() {
-        return smtpHost == null || smtpHost.trim().isEmpty()
+        if (smtpHost == null || smtpHost.trim().isEmpty()
                 || "localhost".equalsIgnoreCase(smtpHost.trim())
-                || "127.0.0.1".equals(smtpHost.trim());
+                || "127.0.0.1".equals(smtpHost.trim())) {
+            return true;
+        }
+        if (smtpAuth && (smtpUsername == null || smtpUsername.trim().isEmpty() || smtpPassword == null || smtpPassword.trim().isEmpty())) {
+            return true;
+        }
+        return false;
     }
 
     @Value("${sms.provider.authkey:${SMS_PROVIDER_AUTHKEY:${sms.auth.key:}}}")
@@ -110,7 +125,7 @@ public class AuthService {
     private void sendParentOtpEmail(String toAddress, String otp) {
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "beta@beta-softnet.com";
+            String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "noreply@bnxmail.com";
             message.setFrom(fromAddress);
             message.setTo(toAddress);
             message.setSubject("BNX Mail Parent Consent Verification");
@@ -674,7 +689,7 @@ public class AuthService {
 
         try {
             SimpleMailMessage message = new SimpleMailMessage();
-            String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "beta@beta-softnet.com";
+            String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "noreply@bnxmail.com";
             message.setFrom(fromAddress);
             message.setTo(recipient);
             message.setSubject("Your BNX Mail Password Reset OTP");
