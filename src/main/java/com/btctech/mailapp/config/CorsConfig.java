@@ -29,6 +29,8 @@ public class CorsConfig implements WebMvcConfigurer {
                         "https://cliks.beta-softnet.com",
                         "https://bit-tool.com",
                         "https://www.bit-tool.com",
+                        "https://app2.bit-tool.com",
+                        "http://app2.bit-tool.com",
                         "http://localhost:3000",
                         "http://localhost:5173" // for local frontend
                 )
