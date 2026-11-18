@@ -1966,6 +1966,9 @@ public class MailReceiveService {
                             continue;
                         }
 
+                        // Capture the original SEEN state before classification & body extraction
+                        boolean wasSeen = msg.isSet(Flags.Flag.SEEN);
+
                         String messageId = getMessageIdentifier(msg, userEmail);
                         Address[] from = msg.getFrom();
                         String senderLower = (from != null && from.length > 0) ?
@@ -1982,6 +1985,10 @@ public class MailReceiveService {
                             if (alreadyProcessedInDb || alreadyInSpam) {
                                 log.info("Message [{}] already processed/exists in Spam for recipient {}. Skipping duplicate insert.", messageId, userEmail);
                             } else {
+                                // Preserve original read/unread flag when routing to Spam
+                                if (!wasSeen && msg.isSet(Flags.Flag.SEEN)) {
+                                    try { msg.setFlag(Flags.Flag.SEEN, false); } catch (Exception ignored) {}
+                                }
                                 inbox.copyMessages(new Message[]{msg}, spamFolder);
                                 log.info("✓ Automatically routed spam message [{}] from {} to Spam for recipient {}. Reasons: {}",
                                         messageId, senderLower, userEmail, classification.getReasons());
@@ -2009,6 +2016,11 @@ public class MailReceiveService {
                             inboxModified = true;
                         } else {
                             // Non-spam message (INBOX or REVIEW)
+                            // Crucial: If message was originally unread, restore unread flag so background scanning never marks emails as Read
+                            if (!wasSeen && msg.isSet(Flags.Flag.SEEN)) {
+                                try { msg.setFlag(Flags.Flag.SEEN, false); } catch (Exception ignored) {}
+                            }
+
                             try {
                                 if (messageId != null && !processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId)) {
                                     ProcessedEmail pe = ProcessedEmail.builder()
@@ -2164,6 +2176,9 @@ public class MailReceiveService {
         // Set timeouts to prevent hanging threads
         props.put("mail.imap.connectiontimeout", "10000");
         props.put("mail.imap.timeout", "10000");
+        // Ensure fetching content/body does not inadvertently set the \Seen (Read) flag on IMAP server
+        props.put("mail.imap.peek", "true");
+        props.put("mail.imaps.peek", "true");
 
         Session session = Session.getInstance(props);
         Store store = session.getStore(imapProtocol);
