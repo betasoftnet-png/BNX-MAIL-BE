@@ -377,4 +377,164 @@ public class SpamClassifierServiceTest {
         assertTrue(result.isTrusted());
         assertEquals(0.0, result.getSpamScore());
     }
+
+    @Test
+    @DisplayName("Verification OTP 1: Legitimate CyberLetics verification email via Brevo → Inbox")
+    void testVerificationOtp1_CyberLeticsVerificationEmailViaBrevo_RoutesToInbox() throws Exception {
+        String sender = "no-reply@cyberletics.com";
+        Map<String, String> headers = Map.of(
+                "Return-Path", "<12345-smtp-out@sendinblue.com>",
+                "List-Unsubscribe", "<https://cyberletics.com/unsub?id=4920>",
+                "Precedence", "bulk",
+                "Authentication-Results", "mx.bnxmail.com; spf=pass (domain of sendinblue.com designates sender IP); dkim=pass (domain=cyberletics.com)"
+        );
+        String subject = "CyberLetics Verification Code: 492011";
+        String body = "Welcome to CyberLetics! Your verification code is 492011. Please enter this OTP in the app to complete your account verification.";
+        String htmlBody = "<p>Welcome to <b>CyberLetics</b>!</p><p>Your verification code is: <h2>492011</h2></p>" +
+                "<p>Please enter this code in the app to verify your account.</p>";
+
+        Message msg = createMockMessage(sender, subject, body, htmlBody, headers, null);
+
+        // Unknown sender (first time)
+        when(senderReputationRepository.existsByUserEmailAndSenderEmail(anyString(), anyString())).thenReturn(false);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.INBOX, result.getVerdict(), "Legitimate CyberLetics verification email must route to INBOX");
+        assertEquals("UPDATES", result.getCategory(), "Category must be UPDATES");
+        assertTrue(result.isTransactional(), "Must be recognized as transactional email");
+        assertTrue(result.getSpamScore() < 0.35, "Spam score must be low");
+    }
+
+    @Test
+    @DisplayName("Verification OTP 2: Legitimate password reset email → Inbox")
+    void testVerificationOtp2_LegitimatePasswordReset_RoutesToInbox() throws Exception {
+        String sender = "security@cloudplatform.io";
+        Map<String, String> headers = Map.of(
+                "Authentication-Results", "mx.bnxmail.com; spf=pass; dkim=pass; dmarc=pass"
+        );
+        String subject = "Password Reset Request";
+        String body = "We received a request to reset your password. Use the following code: 783921 or click the link to reset your password: https://cloudplatform.io/reset-password?token=a8f93e1";
+
+        Message msg = createMockMessage(sender, subject, body, null, headers, null);
+
+        when(senderReputationRepository.existsByUserEmailAndSenderEmail(anyString(), anyString())).thenReturn(false);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.INBOX, result.getVerdict(), "Legitimate password reset must route to INBOX");
+        assertEquals("UPDATES", result.getCategory());
+        assertTrue(result.isTransactional());
+        assertTrue(result.getSpamScore() < 0.35);
+    }
+
+    @Test
+    @DisplayName("Verification OTP 3: Legitimate login OTP → Inbox")
+    void testVerificationOtp3_LegitimateLoginOtp_RoutesToInbox() throws Exception {
+        String sender = "accounts@secure-portal.com";
+        Map<String, String> headers = Map.of(
+                "Authentication-Results", "mx.bnxmail.com; spf=pass; dkim=pass"
+        );
+        String subject = "Your Login OTP is 552194";
+        String body = "Your one-time passcode for sign-in is 552194. This code is valid for 10 minutes. Do not share it with anyone.";
+
+        Message msg = createMockMessage(sender, subject, body, null, headers, null);
+
+        when(senderReputationRepository.existsByUserEmailAndSenderEmail(anyString(), anyString())).thenReturn(false);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.INBOX, result.getVerdict(), "Legitimate login OTP must route to INBOX");
+        assertEquals("UPDATES", result.getCategory());
+        assertTrue(result.isTransactional());
+        assertTrue(result.getSpamScore() < 0.35);
+    }
+
+    @Test
+    @DisplayName("Verification OTP 4: Fake verification email with phishing links → Spam")
+    void testVerificationOtp4_FakeVerificationEmailWithPhishingLinks_RoutesToSpam() throws Exception {
+        String phishSender = "security@paypal-security-alert.net";
+        String subject = "Your PayPal Verification Code: 994821";
+        String htmlContent = "<p>Your PayPal verification code is <b>994821</b>.</p>" +
+                "<p>If you did not request this, cancel the unauthorized login immediately: " +
+                "<a href=\"http://192.168.1.100/login\">https://www.paypal.com/signin</a></p>";
+
+        Message msg = createMockMessage(phishSender, subject, "Your code is 994821. Cancel at http://192.168.1.100/login", htmlContent, null, null);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.SPAM, result.getVerdict(), "Fake verification email with phishing link must route to SPAM");
+        assertEquals("SPAM", result.getCategory());
+        assertTrue(result.isPhishing(), "Must be detected as phishing");
+        assertEquals(1.0, result.getSpamScore());
+    }
+
+    @Test
+    @DisplayName("Verification OTP 5: Blocked malicious sender → Spam")
+    void testVerificationOtp5_BlockedMaliciousSender_RoutesToSpam() throws Exception {
+        String blockedSender = "attacker@scamnet.org";
+        String subject = "Your Verification Code: 123456";
+        String body = "Your verification code is 123456. Enter this code to proceed.";
+
+        Message msg = createMockMessage(blockedSender, subject, body, null, null, null);
+
+        // Sender is explicitly in blocked repository
+        when(blockedContactRepository.existsByUserEmailAndBlockedEmail(recipientUser, blockedSender)).thenReturn(true);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.SPAM, result.getVerdict(), "Blocked sender must route to SPAM even if claiming OTP");
+        assertEquals("SPAM", result.getCategory());
+        assertTrue(result.isBlocked());
+        assertEquals(1.0, result.getSpamScore());
+    }
+
+    @Test
+    @DisplayName("Section 6 Case 2: CyberLetics Welcome email via Brevo → Inbox")
+    void testSection6_Case2_CyberLeticsWelcomeEmail_RoutesToInbox() throws Exception {
+        String sender = "welcome@cyberletics.com";
+        Map<String, String> headers = Map.of(
+                "Return-Path", "<smtp-out@sendinblue.com>",
+                "List-Unsubscribe", "<https://cyberletics.com/unsub?id=9928>",
+                "Precedence", "bulk",
+                "Authentication-Results", "mx.bnxmail.com; spf=pass (domain of sendinblue.com designates sender IP); dkim=pass (domain=cyberletics.com)"
+        );
+        String subject = "Welcome to CyberLetics!";
+        String body = "Welcome to CyberLetics! We are excited to have you on board. Your account registration is complete.";
+        String htmlBody = "<p>Welcome to <b>CyberLetics</b>!</p>" +
+                "<p>Your free trial has started. Explore your dashboard:</p>" +
+                "<p><a href=\"https://r.brevo.com/tr/cl/992812\">https://cyberletics.com/dashboard</a></p>";
+
+        Message msg = createMockMessage(sender, subject, body, htmlBody, headers, null);
+
+        when(senderReputationRepository.existsByUserEmailAndSenderEmail(anyString(), anyString())).thenReturn(false);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.INBOX, result.getVerdict(), "CyberLetics Welcome email must route to INBOX");
+        assertEquals("UPDATES", result.getCategory(), "Category must be UPDATES");
+        assertTrue(result.isTransactional(), "Must be recognized as transactional welcome email");
+        assertTrue(result.getSpamScore() < 0.35, "Spam score must be low");
+    }
+
+    @Test
+    @DisplayName("Section 6 Case 5: Spoofed account verification email → Spam")
+    void testSection6_Case5_SpoofedAccountVerificationEmail_RoutesToSpam() throws Exception {
+        String spoofedFrom = "security@apple.com";
+        Map<String, String> headers = Map.of(
+                "Return-Path", "<attacker@malicious-relay.com>",
+                "Authentication-Results", "mx.bnxmail.com; spf=fail (domain of security@apple.com does not designate attacker IP); dkim=fail; dmarc=reject"
+        );
+        String subject = "Apple ID Account Verification Required";
+        String body = "Your account verification code is 492019. Please confirm your account immediately.";
+
+        Message msg = createMockMessage(spoofedFrom, subject, body, null, headers, null);
+
+        SpamClassificationResult result = spamClassifierService.classify(msg, recipientUser);
+
+        assertEquals(Verdict.SPAM, result.getVerdict(), "Spoofed account verification email must route to SPAM");
+        assertEquals("SPAM", result.getCategory());
+        assertTrue(result.isSpoofed(), "Must be detected as spoofed");
+        assertEquals(1.0, result.getSpamScore());
+    }
 }

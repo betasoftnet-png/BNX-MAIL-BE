@@ -46,4 +46,5 @@ public class SpamClassificationResult {
     private boolean hasMaliciousAttachment;
     private boolean isTrusted;
     private boolean isFirstTimeSender;
+    private boolean isTransactional;
 }

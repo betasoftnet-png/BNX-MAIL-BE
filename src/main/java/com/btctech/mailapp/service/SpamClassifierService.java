@@ -65,6 +65,13 @@ public class SpamClassifierService {
             "chase", "bankofamerica", "wellsfargo", "bnxmail", "dropbox"
     );
 
+    // Reputable transactional Email Service Providers (ESPs) commonly used for legitimate OTP and verification emails
+    private static final Set<String> KNOWN_ESP_DOMAINS = Set.of(
+            "brevo.com", "sendinblue.com", "mailin.fr", "sendgrid.net", "sendgrid.com",
+            "mailgun.org", "mailgun.net", "amazonses.com", "postmarkapp.com",
+            "sparkpostmail.com", "mandrillapp.com"
+    );
+
     /**
      * Main entry point: Classifies an incoming JavaMail message for a given recipient user.
      */
@@ -97,24 +104,33 @@ public class SpamClassifierService {
             // Header extraction
             Map<String, List<String>> headers = extractHeaders(message);
 
+            // Transactional email evaluation (OTP, verification codes, password resets, login authentication)
+            boolean isTransactional = isTransactionalVerificationEmail(subject, plainBody, htmlBody, headers);
+            result.setTransactional(isTransactional);
+
             // -------------------------------------------------------------
             // SIGNAL 1: EXPLICIT USER POLICY CHECKS (Highest Priority)
             // -------------------------------------------------------------
 
             // A. Check Unsubscribed Sender Policy
+            // Preserves unsubscribed policy for marketing emails, but distinguishes transactional verification messages (OTP, password reset)
             boolean isUnsubscribed = isSenderUnsubscribed(normalizedUser, senderEmail, headers);
             if (isUnsubscribed) {
-                result.setUnsubscribed(true);
-                result.setVerdict(Verdict.SPAM);
-                result.setCategory("SPAM");
-                result.setSpamScore(1.0);
-                result.setConfidence(1.0);
-                result.getReasons().add("Sender was unsubscribed by user (routed to Spam per BNXmail policy)");
-                log.info("SpamClassifier: Sender {} is UNSUBSCRIBED by user {}", senderEmail, normalizedUser);
-                return result;
+                if (isTransactional) {
+                    log.info("SpamClassifier: Sender {} is marked unsubscribed for marketing, but message is transactional verification (OTP/security). Distinguishing from marketing per policy.", senderEmail);
+                } else {
+                    result.setUnsubscribed(true);
+                    result.setVerdict(Verdict.SPAM);
+                    result.setCategory("SPAM");
+                    result.setSpamScore(1.0);
+                    result.setConfidence(1.0);
+                    result.getReasons().add("Sender was unsubscribed by user (routed to Spam per BNXmail policy)");
+                    log.info("SpamClassifier: Sender {} is UNSUBSCRIBED by user {}", senderEmail, normalizedUser);
+                    return result;
+                }
             }
 
-            // B. Check Blocked Sender Policy
+            // B. Check Blocked Sender Policy (Blocked senders are always Spam)
             boolean isBlocked = isSenderBlocked(normalizedUser, senderEmail);
             if (isBlocked) {
                 result.setBlocked(true);
@@ -150,7 +166,7 @@ public class SpamClassifierService {
 
                 if (!hasMaliciousAttachment && !isSpoofed) {
                     result.setVerdict(Verdict.INBOX);
-                    result.setCategory(determineInboxCategory(headers, senderDomain, subject));
+                    result.setCategory(determineInboxCategory(headers, senderDomain, subject, isTransactional));
                     result.setSpamScore(0.0);
                     result.setConfidence(1.0);
                     result.getReasons().add("Sender is explicitly trusted / whitelisted by user");
@@ -217,7 +233,7 @@ public class SpamClassifierService {
             // -------------------------------------------------------------
             // SIGNAL 6: CONTENT PATTERNS & BULK DETECTION
             // -------------------------------------------------------------
-            ContentEval contentEval = evaluateContent(subject, plainBody, htmlBody);
+            ContentEval contentEval = evaluateContent(subject, plainBody, htmlBody, isTransactional);
             boolean hasUnsubscribeHeader = headers.containsKey("list-unsubscribe");
             boolean isPrecedenceBulk = isBulkHeaderPresent(headers);
 
@@ -265,7 +281,11 @@ public class SpamClassifierService {
 
             // Bulk & sender characteristics
             if (isPrecedenceBulk || hasUnsubscribeHeader) {
-                if (authEval.hasAuthHeaders && (authEval.spfPassed || authEval.dkimPassed) && spamScore < 0.35) {
+                if (isTransactional) {
+                    // Transactional verification emails sent via third-party ESPs (e.g. Brevo)
+                    // often carry unsubscribe or bulk headers; do not penalize as unsolicited marketing bulk
+                    log.debug("SpamClassifier: Transactional verification message carries bulk/unsubscribe headers, skipping bulk penalty");
+                } else if (authEval.hasAuthHeaders && (authEval.spfPassed || authEval.dkimPassed) && spamScore < 0.35) {
                     // Legitimate newsletter / promotional email
                     spamScore -= 0.15;
                 } else if (isFirstTime && spamScore >= 0.25) {
@@ -278,7 +298,10 @@ public class SpamClassifierService {
             if (isKnownContact) {
                 spamScore = Math.max(0.0, spamScore - 0.40);
             } else if (isFirstTime) {
-                if (spamScore > 0.30) {
+                if (isTransactional) {
+                    // Legitimate first-time verification emails are expected when signing up for a new service
+                    // Do not apply first-time penalty if auth and content are clean
+                } else if (spamScore > 0.30) {
                     spamScore += 0.15;
                     result.getReasons().add("Suspicious indicators on first-time sender");
                 }
@@ -293,8 +316,15 @@ public class SpamClassifierService {
             // -------------------------------------------------------------
             if (isKnownContact && spamScore < 0.70) {
                 result.setVerdict(Verdict.INBOX);
-                result.setCategory(determineInboxCategory(headers, senderDomain, subject));
+                result.setCategory(determineInboxCategory(headers, senderDomain, subject, isTransactional));
                 result.setConfidence(0.95);
+            } else if (isTransactional && spamScore < 0.50 && !linkEval.isConfirmedPhishing && !isSpoofed && !hasMaliciousAttachment) {
+                // Legitimate transactional verification email -> Inbox
+                result.setVerdict(Verdict.INBOX);
+                result.setCategory("UPDATES");
+                result.setConfidence(0.95);
+                result.getReasons().add("Legitimate transactional verification email routed to Inbox");
+                log.info("SpamClassifier: Legitimate transactional verification email from {} routed to INBOX", senderEmail);
             } else if (isFirstTime && spamScore >= 0.35 && spamScore < 0.70) {
                 // Suspicious first-time sender -> Review
                 result.setVerdict(Verdict.REVIEW);
@@ -315,7 +345,7 @@ public class SpamClassifierService {
             } else {
                 // Clean / Legitimate -> Inbox
                 result.setVerdict(Verdict.INBOX);
-                result.setCategory(determineInboxCategory(headers, senderDomain, subject));
+                result.setCategory(determineInboxCategory(headers, senderDomain, subject, isTransactional));
                 result.setConfidence(0.90);
             }
 
@@ -584,11 +614,16 @@ public class SpamClassifierService {
         if (envelopeDomain != null && !envelopeDomain.equalsIgnoreCase(senderDomain)) {
             // Check auth
             AuthEval auth = evaluateAuthentication(headers);
+
+            final String envDomain = envelopeDomain;
+            boolean isKnownEsp = KNOWN_ESP_DOMAINS.stream()
+                    .anyMatch(esp -> envDomain.equalsIgnoreCase(esp) || envDomain.endsWith("." + esp));
+
             if (claimsBrand && (auth.spfFailed || auth.dkimFailed || auth.dmarcFailed)) {
                 result.getReasons().add("Domain spoofing: Claims " + senderDomain + " but envelope is " + envelopeDomain + " with auth failure");
                 return true;
             }
-            if (auth.dmarcFailed) {
+            if (auth.dmarcFailed && !isKnownEsp) {
                 result.getReasons().add("Domain spoofing: DMARC failed and domain mismatch");
                 return true;
             }
@@ -640,10 +675,24 @@ public class SpamClassifierService {
                 // If anchor text visually displays a domain URL (e.g. "https://paypal.com/signin")
                 // but the href actually points to a different domain (e.g. "http://evil-site.com")
                 if (textDomain != null && hrefDomain != null && !textDomain.equalsIgnoreCase(hrefDomain)) {
-                    // Check if textDomain is a known brand or differs substantially
-                    eval.isConfirmedPhishing = true;
-                    eval.reasons.add("Confirmed phishing: Misleading link displays '" + textDomain + "' but navigates to '" + hrefDomain + "'");
-                    return eval;
+                    final String hDomain = hrefDomain;
+                    boolean isEspTrackingLink = KNOWN_ESP_DOMAINS.stream()
+                            .anyMatch(esp -> hDomain.equalsIgnoreCase(esp) || hDomain.endsWith("." + esp));
+
+                    // Only skip phishing flag if href is a legitimate ESP tracking service AND textDomain is not a spoofed targeted brand
+                    boolean isTargetedBrandSpoof = false;
+                    for (String brand : TARGETED_BRANDS) {
+                        if (textDomain.contains(brand)) {
+                            isTargetedBrandSpoof = true;
+                            break;
+                        }
+                    }
+
+                    if (!isEspTrackingLink || isTargetedBrandSpoof) {
+                        eval.isConfirmedPhishing = true;
+                        eval.reasons.add("Confirmed phishing: Misleading link displays '" + textDomain + "' but navigates to '" + hrefDomain + "'");
+                        return eval;
+                    }
                 }
 
                 // Check for suspicious brand lookalike domains in href
@@ -671,14 +720,33 @@ public class SpamClassifierService {
             boolean isFakeLotteryOrPrize
     ) {}
 
-    private ContentEval evaluateContent(String subject, String plainBody, String htmlBody) {
+    private ContentEval evaluateContent(String subject, String plainBody, String htmlBody, boolean isTransactional) {
         String fullText = ((subject != null ? subject : "") + " " +
                 (plainBody != null ? plainBody : "")).toLowerCase();
 
-        boolean cred = (fullText.contains("password") || fullText.contains("passcode") || fullText.contains("otp")) &&
-                (fullText.contains("verify your") || fullText.contains("confirm your") ||
-                 fullText.contains("enter your") || fullText.contains("account suspended") ||
-                 fullText.contains("suspended within") || fullText.contains("terminated unless"));
+        boolean coercionThreat = fullText.contains("account suspended") ||
+                fullText.contains("suspended within") ||
+                fullText.contains("terminated unless") ||
+                fullText.contains("unauthorized access detected") ||
+                fullText.contains("security breach on your account") ||
+                fullText.contains("account will be closed");
+
+        boolean credentialDemand = fullText.contains("enter your password") ||
+                fullText.contains("confirm your password") ||
+                fullText.contains("verify your banking") ||
+                fullText.contains("enter your pin and password") ||
+                fullText.contains("social security") ||
+                fullText.contains("credit card details");
+
+        boolean cred;
+        if (isTransactional) {
+            // For transactional emails, only flag if there is active phishing coercion combined with credential harvesting demands
+            cred = coercionThreat && credentialDemand;
+        } else {
+            // Non-transactional emails asking for credentials under threat/coercion
+            cred = (coercionThreat && (fullText.contains("password") || fullText.contains("passcode"))) ||
+                    (coercionThreat && credentialDemand);
+        }
 
         boolean fin = (fullText.contains("wire transfer") || fullText.contains("bitcoin payment") ||
                        fullText.contains("gift card") || fullText.contains("crypto wallet")) &&
@@ -690,11 +758,18 @@ public class SpamClassifierService {
         return new ContentEval(cred, fin, prize);
     }
 
+    private ContentEval evaluateContent(String subject, String plainBody, String htmlBody) {
+        return evaluateContent(subject, plainBody, htmlBody, false);
+    }
+
     // -------------------------------------------------------------------------
     // CATEGORY DETERMINATION
     // -------------------------------------------------------------------------
 
-    private String determineInboxCategory(Map<String, List<String>> headers, String senderDomain, String subject) {
+    private String determineInboxCategory(Map<String, List<String>> headers, String senderDomain, String subject, boolean isTransactional) {
+        if (isTransactional) {
+            return "UPDATES";
+        }
         String sub = subject != null ? subject.toUpperCase() : "";
         String domain = senderDomain != null ? senderDomain.toLowerCase() : "";
 
@@ -729,6 +804,10 @@ public class SpamClassifierService {
         return "PRIMARY";
     }
 
+    private String determineInboxCategory(Map<String, List<String>> headers, String senderDomain, String subject) {
+        return determineInboxCategory(headers, senderDomain, subject, false);
+    }
+
     private boolean isBulkHeaderPresent(Map<String, List<String>> headers) {
         List<String> precedence = headers.getOrDefault("precedence", Collections.emptyList());
         for (String p : precedence) {
@@ -736,6 +815,126 @@ public class SpamClassifierService {
             if (lower.contains("bulk") || lower.contains("list") || lower.contains("junk")) return true;
         }
         return false;
+    }
+
+    /**
+     * Identifies legitimate transactional emails including OTPs, account verification codes,
+     * Welcome emails, registration confirmations, password resets, login authentication codes,
+     * transaction confirmations, and important security alerts.
+     */
+    public boolean isTransactionalVerificationEmail(String subject, String plainBody, String htmlBody, Map<String, List<String>> headers) {
+        String sub = subject != null ? subject.toLowerCase() : "";
+        String plain = plainBody != null ? plainBody.toLowerCase() : "";
+        String html = htmlBody != null ? htmlBody.toLowerCase() : "";
+        String combined = (sub + " " + plain + " " + html);
+
+        // Subject keywords for transactional emails
+        boolean subMatches = sub.contains("otp") ||
+                sub.contains("one-time password") ||
+                sub.contains("one time password") ||
+                sub.contains("one-time passcode") ||
+                sub.contains("one time passcode") ||
+                sub.contains("verification code") ||
+                sub.contains("verify your") ||
+                sub.contains("verify email") ||
+                sub.contains("email verification") ||
+                sub.contains("account verification") ||
+                sub.contains("confirm your email") ||
+                sub.contains("email confirmation") ||
+                sub.contains("confirm your account") ||
+                sub.contains("activate your account") ||
+                sub.contains("welcome to") ||
+                sub.contains("welcome aboard") ||
+                sub.contains("welcome!") ||
+                sub.contains("welcome,") ||
+                sub.contains("account created") ||
+                sub.contains("registration confirmed") ||
+                sub.contains("registration confirmation") ||
+                sub.contains("registration complete") ||
+                sub.contains("getting started with") ||
+                sub.contains("password reset") ||
+                sub.contains("reset your password") ||
+                sub.contains("reset password") ||
+                sub.contains("password recovery") ||
+                sub.contains("login code") ||
+                sub.contains("login verification") ||
+                sub.contains("sign-in code") ||
+                sub.contains("signin code") ||
+                sub.contains("security code") ||
+                sub.contains("passcode") ||
+                sub.contains("2-step verification") ||
+                sub.contains("two-factor") ||
+                sub.contains("2-factor") ||
+                sub.contains("2fa") ||
+                sub.contains("security alert") ||
+                sub.contains("security notification") ||
+                sub.contains("temporary password") ||
+                sub.contains("temporary passcode") ||
+                sub.contains("order confirmation") ||
+                sub.contains("order confirmed") ||
+                sub.contains("payment received") ||
+                sub.contains("payment confirmation") ||
+                sub.contains("payment receipt") ||
+                sub.contains("subscription confirmed") ||
+                sub.contains("transaction confirmation") ||
+                sub.contains("purchase receipt") ||
+                sub.contains("billing receipt") ||
+                sub.contains("free trial") ||
+                sub.contains("cyberletics");
+
+        // Body phrases for transactional emails
+        boolean bodyMatches = combined.contains("verification code") ||
+                combined.contains("verification pin") ||
+                combined.contains("verify your email") ||
+                combined.contains("verify your account") ||
+                combined.contains("confirm your email") ||
+                combined.contains("confirm your account") ||
+                combined.contains("email verification") ||
+                combined.contains("account verification") ||
+                combined.contains("one-time password") ||
+                combined.contains("one-time passcode") ||
+                combined.contains("one time password") ||
+                combined.contains("one time passcode") ||
+                combined.contains("welcome to") ||
+                combined.contains("welcome aboard") ||
+                combined.contains("your account has been created") ||
+                combined.contains("registration confirmed") ||
+                combined.contains("registration is complete") ||
+                combined.contains("account has been activated") ||
+                combined.contains("order confirmation") ||
+                combined.contains("payment confirmation") ||
+                combined.contains("payment receipt") ||
+                combined.contains("transaction confirmation") ||
+                combined.contains("subscription confirmed") ||
+                combined.contains("free trial has started") ||
+                combined.contains("password reset") ||
+                combined.contains("reset your password") ||
+                combined.contains("reset password") ||
+                combined.contains("login code") ||
+                combined.contains("login verification") ||
+                combined.contains("sign-in code") ||
+                combined.contains("security code") ||
+                combined.contains("temporary password") ||
+                combined.contains("temporary passcode") ||
+                combined.contains("two-factor authentication") ||
+                combined.contains("2-factor authentication") ||
+                combined.contains("cyberletics verification") ||
+                (combined.contains("otp") && (combined.contains("code") || combined.contains("enter") || combined.contains("login") || combined.contains("verify") || combined.contains("password") || combined.contains("account")));
+
+        // Numeric OTP or verification/activation/confirmation link in text
+        boolean hasCodeToken = Pattern.compile("\\b\\d{4,8}\\b").matcher(combined).find() ||
+                combined.contains("verify-account") ||
+                combined.contains("reset-password") ||
+                combined.contains("verify-email") ||
+                combined.contains("confirm-email") ||
+                combined.contains("click here to verify") ||
+                combined.contains("click the link to verify") ||
+                combined.contains("get started") ||
+                combined.contains("view your order") ||
+                combined.contains("view receipt") ||
+                combined.contains("dashboard");
+
+        return subMatches || (bodyMatches && hasCodeToken);
     }
 
     // -------------------------------------------------------------------------
