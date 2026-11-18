@@ -1316,6 +1316,17 @@ public class MailReceiveService {
                                 break;
                             }
                         }
+                        // Fallback by message number if not found by UID
+                        if (numericUid > 0 && numericUid <= f.getMessageCount()) {
+                            try {
+                                jakarta.mail.Message msgByNum = f.getMessage((int) numericUid);
+                                if (msgByNum != null && !msgByNum.isExpunged()) {
+                                    message = msgByNum;
+                                    folder = f;
+                                    break;
+                                }
+                            } catch (Exception ignored) {}
+                        }
                         f.close(false);
                     }
                 } catch (Exception ignored) {}
@@ -1690,13 +1701,16 @@ public class MailReceiveService {
     private EmailDTO convertToDTO(Message message, UIDFolder uidFolder, String userEmail) throws MessagingException, IOException {
         EmailDTO dto = new EmailDTO();
         
-        String uidStr;
-        // Use persistent UID if available, fallback to message number
+        long uidVal = -1;
         if (uidFolder != null) {
-            uidStr = String.valueOf(uidFolder.getUID(message));
-        } else {
-            uidStr = String.valueOf(message.getMessageNumber());
+            try {
+                uidVal = uidFolder.getUID(message);
+            } catch (Exception ignored) {}
         }
+        if (uidVal <= 0) {
+            uidVal = message.getMessageNumber();
+        }
+        String uidStr = String.valueOf(uidVal);
         dto.setUid(uidStr);
 
         Address[] from = message.getFrom();
@@ -1966,10 +1980,16 @@ public class MailReceiveService {
                             continue;
                         }
 
+                        String messageId = getMessageIdentifier(msg, userEmail);
+
+                        // If already analyzed and classified in a previous run, leave message and flags completely untouched
+                        if (messageId != null && processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId)) {
+                            continue;
+                        }
+
                         // Capture the original SEEN state before classification & body extraction
                         boolean wasSeen = msg.isSet(Flags.Flag.SEEN);
 
-                        String messageId = getMessageIdentifier(msg, userEmail);
                         Address[] from = msg.getFrom();
                         String senderLower = (from != null && from.length > 0) ?
                                 extractEmailAddress(from[0].toString()).toLowerCase() : "";
