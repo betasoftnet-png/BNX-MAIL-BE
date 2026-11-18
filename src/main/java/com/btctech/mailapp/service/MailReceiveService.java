@@ -24,8 +24,10 @@ import java.util.HashSet;
 
 import com.btctech.mailapp.dto.EmailDTO;
 import com.btctech.mailapp.dto.FolderResult;
+import com.btctech.mailapp.dto.SpamClassificationResult;
 import com.btctech.mailapp.dto.StorageQuotaDTO;
 import com.btctech.mailapp.exception.MailException;
+import com.btctech.mailapp.repository.SenderReputationRepository;
 import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
@@ -66,6 +68,8 @@ public class MailReceiveService {
     private final MailLabelMappingRepository labelMappingRepository;
     private final BlockedContactRepository blockedContactRepository;
     private final ProcessedEmailRepository processedEmailRepository;
+    private final SpamClassifierService spamClassifierService;
+    private final SenderReputationRepository senderReputationRepository;
 
 
     /**
@@ -80,9 +84,9 @@ public class MailReceiveService {
         try {
             store = connect(email, password);
 
-            // Ensure any pending unsubscribed sender emails in INBOX are safely and idempotently moved to Spam
+            // Ensure incoming emails are automatically analyzed, classified, and routed to the correct folder
             if ("INBOX".equalsIgnoreCase(folderName) || "Spam".equalsIgnoreCase(folderName)) {
-                processUnsubscribedEmails(store, email);
+                processIncomingAndSpamEmails(store, email);
             }
 
             String actualFolderName = folderName;
@@ -881,8 +885,32 @@ public class MailReceiveService {
                     return uid;
                 }
 
-                // If moving from Spam, clean up any duplicate copies of the same email in Spam
+                // If moving from Spam (e.g. user selected "Not Spam"), learn preference and whitelist sender
                 if ("Spam".equalsIgnoreCase(resolvedSourceFolderName)) {
+                    try {
+                        Address[] fromAddrs = message.getFrom();
+                        if (fromAddrs != null && fromAddrs.length > 0) {
+                            String cleanSender = extractEmailAddress(fromAddrs[0].toString());
+                            if (cleanSender != null && !cleanSender.isEmpty()) {
+                                spamClassifierService.markSenderAsNotSpam(email, cleanSender);
+                                log.info("✓ Sender {} marked as NOT SPAM for user {}", cleanSender, email);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Could not extract sender for not-spam update: {}", ex.getMessage());
+                    }
+                    try {
+                        String msgId = getMessageIdentifier(message, email);
+                        if (msgId != null) {
+                            processedEmailRepository.findByUserEmailAndMessageIdentifier(email, msgId).ifPresent(pe -> {
+                                pe.setFolder("INBOX");
+                                pe.setProcessedAt(LocalDateTime.now());
+                                processedEmailRepository.save(pe);
+                            });
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Notice updating processed email to INBOX: {}", ex.getMessage());
+                    }
                     try {
                         String msgId = extractMessageId(message);
                         if (msgId != null && !msgId.isEmpty()) {
@@ -899,6 +927,37 @@ public class MailReceiveService {
                         }
                     } catch (Exception dupEx) {
                         log.debug("Spam duplicate cleanup notice: {}", dupEx.getMessage());
+                    }
+                }
+
+                // If moving to Spam (e.g. user manually marked email as Spam), record preference
+                if ("Spam".equalsIgnoreCase(resolvedTargetFolderName)) {
+                    try {
+                        Address[] fromAddrs = message.getFrom();
+                        if (fromAddrs != null && fromAddrs.length > 0) {
+                            String cleanSender = extractEmailAddress(fromAddrs[0].toString());
+                            if (cleanSender != null && !cleanSender.isEmpty()) {
+                                spamClassifierService.recordSenderReputation(email, cleanSender, "REPORTED_SPAM", "User manually moved email to Spam");
+                                log.info("✓ Sender {} marked as REPORTED_SPAM for user {}", cleanSender, email);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Could not extract sender for spam update: {}", ex.getMessage());
+                    }
+                    try {
+                        String msgId = getMessageIdentifier(message, email);
+                        if (msgId != null) {
+                            ProcessedEmail pe = processedEmailRepository.findByUserEmailAndMessageIdentifier(email, msgId)
+                                    .orElseGet(() -> ProcessedEmail.builder()
+                                            .userEmail(email)
+                                            .messageIdentifier(msgId)
+                                            .build());
+                            pe.setFolder("SPAM");
+                            pe.setProcessedAt(LocalDateTime.now());
+                            processedEmailRepository.save(pe);
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Notice updating processed email to SPAM: {}", ex.getMessage());
                     }
                 }
 
@@ -1281,7 +1340,7 @@ public class MailReceiveService {
         Folder inbox = null;
         try {
             store = connect(email, password);
-            processUnsubscribedEmails(store, email);
+            processIncomingAndSpamEmails(store, email);
 
             inbox = store.getFolder("INBOX");
             if (!inbox.exists()) {
@@ -1320,7 +1379,7 @@ public class MailReceiveService {
 
         try {
             store = connect(email, password);
-            processUnsubscribedEmails(store, email);
+            processIncomingAndSpamEmails(store, email);
             folder = store.getFolder("INBOX");
             
             if (!folder.exists()) {
@@ -1730,7 +1789,7 @@ public class MailReceiveService {
         dto.setHasAttachments(hasAttachments(message));
         if (dto.isHasAttachments()) dto.setAttachments(extractAttachments(message));
         
-        String category = categorizeEmail(message);
+        String category = categorizeEmail(message, userEmail);
         
         // Override category based on actual folder location
         String upperFolder = actualFolderName.toUpperCase();
@@ -1832,26 +1891,18 @@ public class MailReceiveService {
     }
 
     /**
-     * Process incoming emails from unsubscribed senders in INBOX:
-     * Moves them to SPAM idempotently with duplicate prevention check.
+     * Process incoming emails in INBOX:
+     * Analyzes every message with SpamClassifierService.
+     * Moves genuine spam, phishing, spoofed emails, malicious attachments,
+     * blocked, and unsubscribed senders to Spam folder idempotently.
+     * Keeps legitimate emails, promotional emails (unless unsubscribed),
+     * and known contacts in INBOX.
+     * Categorizes uncertain/suspicious first-time senders as REVIEW.
      */
-    private void processUnsubscribedEmails(Store store, String userEmail) {
+    private void processIncomingAndSpamEmails(Store store, String userEmail) {
         if (store == null || userEmail == null || userEmail.trim().isEmpty()) return;
 
         synchronized (userEmail.intern()) {
-            List<BlockedContact> blockedList = blockedContactRepository.findByUserEmail(userEmail);
-            if (blockedList == null || blockedList.isEmpty()) {
-                return;
-            }
-
-            Map<String, LocalDateTime> blockedMap = new HashMap<>();
-            for (BlockedContact c : blockedList) {
-                if (c.getBlockedEmail() != null) {
-                    blockedMap.put(c.getBlockedEmail().toLowerCase().trim(), c.getBlockedAt() != null ? c.getBlockedAt() : LocalDateTime.MIN);
-                }
-            }
-            if (blockedMap.isEmpty()) return;
-
             Folder inbox = null;
             Folder spamFolder = null;
             try {
@@ -1897,62 +1948,85 @@ public class MailReceiveService {
                 Message[] messages = inbox.getMessages();
                 boolean inboxModified = false;
 
+                // Use FetchProfile for fast bulk header inspection
+                FetchProfile fp = new FetchProfile();
+                fp.add(FetchProfile.Item.ENVELOPE);
+                fp.add(FetchProfile.Item.FLAGS);
+                fp.add("Message-ID");
+                fp.add("Authentication-Results");
+                fp.add("Received-SPF");
+                fp.add("DKIM-Signature");
+                fp.add("List-Unsubscribe");
+                fp.add("Precedence");
+                inbox.fetch(messages, fp);
+
                 for (Message msg : messages) {
                     try {
-                        if (msg.isSet(Flags.Flag.DELETED)) {
+                        if (msg.isSet(Flags.Flag.DELETED) || msg.isExpunged()) {
                             continue;
                         }
+
+                        String messageId = getMessageIdentifier(msg, userEmail);
                         Address[] from = msg.getFrom();
-                        if (from == null || from.length == 0) continue;
-                        String cleanFrom = extractEmailAddress(from[0].toString());
-                        if (cleanFrom == null) continue;
-                        String senderLower = cleanFrom.toLowerCase().trim();
+                        String senderLower = (from != null && from.length > 0) ?
+                                extractEmailAddress(from[0].toString()).toLowerCase() : "";
 
-                        if (blockedMap.containsKey(senderLower)) {
-                            LocalDateTime blockedAt = blockedMap.get(senderLower);
-                            java.util.Date sentDate = msg.getSentDate();
-                            LocalDateTime msgTime = (sentDate != null) ?
-                                    sentDate.toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() :
-                                    LocalDateTime.now();
+                        // Classify message with the multi-signal classification engine
+                        SpamClassificationResult classification = spamClassifierService.classify(msg, userEmail);
 
-                            if (!msgTime.isBefore(blockedAt)) {
-                                // Message is from an unsubscribed sender
-                                String messageId = getMessageIdentifier(msg, userEmail);
+                        if (classification.getVerdict() == SpamClassificationResult.Verdict.SPAM) {
+                            boolean alreadyProcessedInDb = messageId != null &&
+                                    processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId);
+                            boolean alreadyInSpam = (messageId != null && existingSpamIdentifiers.contains(messageId));
 
-                                boolean alreadyProcessedInDb = processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId);
-                                boolean alreadyInSpam = (messageId != null && existingSpamIdentifiers.contains(messageId));
-
-                                if (alreadyProcessedInDb || alreadyInSpam) {
-                                    log.info("Message [{}] already processed/exists in Spam for recipient {}. Skipping duplicate insert.", messageId, userEmail);
-                                } else {
-                                    inbox.copyMessages(new Message[]{msg}, spamFolder);
-                                    log.info("✓ Moved email [{}] from unsubscribed sender {} to Spam for recipient {}", messageId, senderLower, userEmail);
-                                    if (messageId != null) {
-                                        existingSpamIdentifiers.add(messageId);
-                                    }
-
-                                    try {
-                                        ProcessedEmail pe = ProcessedEmail.builder()
-                                                .userEmail(userEmail)
-                                                .messageIdentifier(messageId != null ? messageId : ("msg-" + System.currentTimeMillis()))
-                                                .senderEmail(senderLower)
-                                                .subject(msg.getSubject())
-                                                .folder("SPAM")
-                                                .processedAt(LocalDateTime.now())
-                                                .build();
-                                        processedEmailRepository.save(pe);
-                                    } catch (Exception dbEx) {
-                                        log.warn("Processed email save note: {}", dbEx.getMessage());
-                                    }
+                            if (alreadyProcessedInDb || alreadyInSpam) {
+                                log.info("Message [{}] already processed/exists in Spam for recipient {}. Skipping duplicate insert.", messageId, userEmail);
+                            } else {
+                                inbox.copyMessages(new Message[]{msg}, spamFolder);
+                                log.info("✓ Automatically routed spam message [{}] from {} to Spam for recipient {}. Reasons: {}",
+                                        messageId, senderLower, userEmail, classification.getReasons());
+                                if (messageId != null) {
+                                    existingSpamIdentifiers.add(messageId);
                                 }
 
-                                // Mark deleted in INBOX so it is removed from INBOX
-                                msg.setFlag(Flags.Flag.DELETED, true);
-                                inboxModified = true;
+                                try {
+                                    ProcessedEmail pe = ProcessedEmail.builder()
+                                            .userEmail(userEmail)
+                                            .messageIdentifier(messageId != null ? messageId : ("msg-" + System.currentTimeMillis()))
+                                            .senderEmail(senderLower)
+                                            .subject(msg.getSubject())
+                                            .folder("SPAM")
+                                            .processedAt(LocalDateTime.now())
+                                            .build();
+                                    processedEmailRepository.save(pe);
+                                } catch (Exception dbEx) {
+                                    log.warn("Processed email save note: {}", dbEx.getMessage());
+                                }
+                            }
+
+                            // Mark deleted in INBOX so it is removed from INBOX
+                            msg.setFlag(Flags.Flag.DELETED, true);
+                            inboxModified = true;
+                        } else {
+                            // Non-spam message (INBOX or REVIEW)
+                            try {
+                                if (messageId != null && !processedEmailRepository.existsByUserEmailAndMessageIdentifier(userEmail, messageId)) {
+                                    ProcessedEmail pe = ProcessedEmail.builder()
+                                            .userEmail(userEmail)
+                                            .messageIdentifier(messageId)
+                                            .senderEmail(senderLower)
+                                            .subject(msg.getSubject())
+                                            .folder(classification.getVerdict() == SpamClassificationResult.Verdict.REVIEW ? "REVIEW" : "INBOX")
+                                            .processedAt(LocalDateTime.now())
+                                            .build();
+                                    processedEmailRepository.save(pe);
+                                }
+                            } catch (Exception dbEx) {
+                                log.debug("Processed email note: {}", dbEx.getMessage());
                             }
                         }
                     } catch (Exception ex) {
-                        log.warn("Error processing inbox message for unsubscribe check: {}", ex.getMessage());
+                        log.warn("Error processing inbox message for classification: {}", ex.getMessage());
                     }
                 }
 
@@ -1961,12 +2035,16 @@ public class MailReceiveService {
                 }
 
             } catch (Exception e) {
-                log.error("Failed to process unsubscribed emails for user {}: {}", userEmail, e.getMessage(), e);
+                log.error("Failed to process incoming emails for user {}: {}", userEmail, e.getMessage(), e);
             } finally {
                 try { if (spamFolder != null && spamFolder.isOpen()) spamFolder.close(false); } catch (Exception ignored) {}
                 try { if (inbox != null && inbox.isOpen()) inbox.close(false); } catch (Exception ignored) {}
             }
         }
+    }
+
+    private void processUnsubscribedEmails(Store store, String userEmail) {
+        processIncomingAndSpamEmails(store, userEmail);
     }
 
     private String extractEmailAddress(String fromHeader) {
@@ -1977,218 +2055,19 @@ public class MailReceiveService {
         return fromHeader.trim();
     }
 
-
-
-
-    private String categorizeEmail(Message message) {
+    private String categorizeEmail(Message message, String userEmail) {
         if (message == null) return "PRIMARY";
         try {
-            // --- Phase 1: Extract Base Data & Headers ---
-            String subject = "";
-            try { 
-                subject = message.getSubject() != null ? message.getSubject().toUpperCase() : "";
-            } catch (Exception e) {
-                log.debug("Could not read subject for categorization: {}", e.getMessage());
-            }
-
-            String from = "";
-            String fromLocal = "";
-            String fromDomain = "";
-            try {
-                Address[] fromAddresses = message.getFrom();
-                if (fromAddresses != null && fromAddresses.length > 0) {
-                    from = fromAddresses[0].toString().toLowerCase();
-                    // Extract local and domain
-                    String cleanFrom = extractEmailAddress(from);
-                    if (cleanFrom != null && cleanFrom.contains("@")) {
-                        String[] parts = cleanFrom.split("@");
-                        if (parts.length == 2) {
-                            fromLocal = parts[0];
-                            fromDomain = parts[1];
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Could not read sender for categorization: {}", e.getMessage());
-            }
-
-            // Extract headers
-            boolean hasUnsubscribe = false;
-            boolean isBulk = false;
-            boolean isAutoSubmitted = false;
-            try {
-                String[] unsubHeaders = message.getHeader("List-Unsubscribe");
-                if (unsubHeaders != null && unsubHeaders.length > 0) hasUnsubscribe = true;
-
-                String[] precHeaders = message.getHeader("Precedence");
-                if (precHeaders != null && precHeaders.length > 0) {
-                    for (String h : precHeaders) {
-                        if (h.toLowerCase().contains("bulk") || h.toLowerCase().contains("list")) isBulk = true;
-                    }
-                }
-
-                String[] autoHeaders = message.getHeader("Auto-Submitted");
-                if (autoHeaders != null && autoHeaders.length > 0) {
-                    for (String h : autoHeaders) {
-                        if (h.toLowerCase().contains("auto-generated") || h.toLowerCase().contains("auto-replied")) isAutoSubmitted = true;
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Could not read headers for categorization: {}", e.getMessage());
-            }
-
-            // --- Phase 2: Waterfall Classification ---
-
-            // 1. SPAM Detection (Highest Priority)
-            if (subject.contains("LOTTERY") || subject.contains("WINNER") || 
-                subject.contains("INHERITANCE") || subject.contains("VIAGRA") || 
-                subject.contains("CASINO") || subject.contains("JACKPOT") ||
-                subject.contains("URGENT ACTION REQUIRED") || subject.contains("ACCOUNT SUSPENDED") ||
-                subject.contains("YOU'VE WON") || subject.contains("CONGRATULATIONS") ||
-                subject.contains("MILLION DOLLARS") || subject.contains("DEAR WINNER") ||
-                subject.contains("DONATION") || subject.contains("FUND TRANSFERS") ||
-                subject.contains("LOAN OFFER") || subject.contains("FAST CASH") ||
-                subject.contains("EARN MONEY") || subject.contains("WORK FROM HOME") ||
-                subject.contains("BITCOIN") || subject.contains("CRYPTO") ||
-                subject.contains("INVESTMENT OPPORTUNITY") || subject.contains("MAKE MONEY") ||
-                subject.contains("PHARMACY") || subject.contains("CIALIS") ||
-                subject.contains("MEDS ONLINE") || subject.contains("DIET PILLS") ||
-                subject.contains("CHEAP VIAGRA") || subject.contains("ADULT SINGLES") ||
-                subject.contains("MEET GIRLS") || subject.contains("DATING") ||
-                subject.contains("CLICK HERE TO CLAIM") || subject.contains("ACT NOW") ||
-                fromDomain.endsWith(".xyz") || fromDomain.endsWith(".top") || 
-                fromDomain.endsWith(".click") || fromDomain.endsWith(".link") ||
-                fromDomain.contains("lottery") || fromDomain.contains("casino") ||
-                fromDomain.contains("jackpot") || fromDomain.contains("viagra") ||
-                fromDomain.contains("win-cash") || fromDomain.contains("make-money") ||
-                fromLocal.contains("lottery") || fromLocal.contains("winner") ||
-                fromLocal.contains("jackpot") || fromLocal.contains("bonus") ||
-                fromLocal.contains("casino") || fromLocal.contains("viagra") ||
-                fromLocal.contains("cialis") || fromLocal.contains("pharmacy") ||
-                fromLocal.contains("fast-cash") || fromLocal.contains("easy-money") ||
-                fromLocal.contains("crypto-earn") || fromLocal.contains("bitcoin")) {
-                return "SPAM";
-            }
-
-            // 2. JOB Check
-            if (fromDomain.contains("indeed.com") || fromDomain.contains("glassdoor.com") || 
-                fromDomain.contains("naukri.com") || fromDomain.contains("monster.com") || 
-                fromDomain.contains("ziprecruiter.com") || fromDomain.contains("upwork.com") || 
-                fromDomain.contains("fiverr.com") || fromDomain.contains("freelancer.com") ||
-                fromDomain.contains("careerbuilder.com") || fromDomain.contains("simplyhired.com") ||
-                fromDomain.contains("toptal.com") || fromDomain.contains("workable.com") ||
-                fromDomain.contains("greenhouse.io") || fromDomain.contains("lever.co") ||
-                fromLocal.contains("careers") || fromLocal.contains("jobs") || 
-                fromLocal.contains("hiring") || fromLocal.contains("recruitment") || 
-                fromLocal.contains("recruiter") || fromLocal.equals("hr") ||
-                fromLocal.contains("talent") || fromLocal.contains("apply") ||
-                fromLocal.contains("internship") || fromLocal.contains("employment") ||
-                subject.contains("JOB") || subject.contains("HIRING") || 
-                subject.contains("VACANCY") || subject.contains("CAREER") || 
-                subject.contains("RECRUIT") || subject.contains("RESUME") || 
-                subject.contains("INTERVIEW") || subject.contains("APPLICATION") ||
-                subject.contains("JOB OFFER") || subject.contains("OFFER LETTER") ||
-                subject.contains("EMPLOYMENT") || subject.contains("INTERNSHIP") ||
-                subject.contains("JOIN OUR TEAM") || subject.contains("ONBOARDING") ||
-                subject.contains("CONTRACTOR") || subject.contains("SALARY") ||
-                subject.contains("COMPENSATION") || subject.contains("PORTFOLIO") ||
-                subject.contains("SCREENING") || subject.contains("ASSESSMENT")) {
-                return "JOB";
-            }
-
-            // 3. SOCIAL Check
-            if (fromDomain.contains("facebook.com") || fromDomain.contains("instagram.com") || 
-                fromDomain.contains("linkedin.com") || fromDomain.contains("twitter.com") || 
-                fromDomain.contains("t.co") || fromDomain.contains("tiktok.com") || 
-                fromDomain.contains("pinterest.com") || fromDomain.contains("tumblr.com") ||
-                fromDomain.contains("reddit.com") || fromDomain.contains("youtube.com") ||
-                fromDomain.contains("snapchat.com") || fromDomain.contains("discord.com") ||
-                fromDomain.contains("whatsapp.com") || fromDomain.contains("slack.com") ||
-                fromDomain.contains("medium.com") || fromDomain.contains("quora.com") ||
-                fromDomain.contains("meetup.com") || fromDomain.contains("facebookmail.com") ||
-                fromDomain.contains("x.com") ||
-                fromLocal.contains("notification") || fromLocal.contains("social") ||
-                fromLocal.contains("community") || fromLocal.contains("invite") ||
-                fromLocal.contains("friend") || fromLocal.contains("follow") ||
-                fromLocal.contains("mention") || fromLocal.contains("comment") ||
-                subject.contains("SOCIAL") || subject.contains("FRIEND REQUEST") || 
-                subject.contains("NEW FOLLOWER") || subject.contains("MENTIONED YOU") || 
-                subject.contains("COMMENTED ON") || subject.contains("INVITATION TO JOIN") || 
-                subject.contains("NEW MESSAGE FROM") || subject.contains("REACTION") || 
-                subject.contains("RETWEET") || subject.contains("SUBSCRIBED") ||
-                subject.contains("CONNECT REQUEST") || subject.contains("ADDED YOU")) {
-                return "SOCIAL";
-            }
-
-            // 4. PROMOTIONS Check
-            if (hasUnsubscribe || isBulk || 
-                fromDomain.contains("groupon.com") || fromDomain.contains("coupon.com") ||
-                fromDomain.contains("retailmenot.com") || fromDomain.contains("slickdeals.net") ||
-                fromDomain.contains("mailchimp.com") || fromDomain.contains("sendgrid.com") ||
-                fromDomain.contains("hubspot.com") || fromDomain.contains("constantcontact.com") ||
-                fromLocal.contains("newsletter") || fromLocal.contains("marketing") || 
-                fromLocal.contains("offers") || fromLocal.contains("sales") ||
-                fromLocal.contains("promo") || fromLocal.contains("deals") ||
-                fromLocal.contains("coupon") || fromLocal.contains("shop") ||
-                fromLocal.contains("store") ||
-                subject.contains("SALE") || subject.contains("OFFER") || 
-                subject.contains("DISCOUNT") || subject.contains("DEAL") || 
-                subject.contains("PROMOTION") || subject.contains("LIMITED TIME") ||
-                subject.contains("% OFF") || subject.contains("SAVE") ||
-                subject.contains("COUPON") || subject.contains("FREE SHIPPING") ||
-                subject.contains("BLACK FRIDAY") || subject.contains("CYBER MONDAY") ||
-                subject.contains("BUY ONE GET ONE") || subject.contains("BOGO") ||
-                subject.contains("CLEARANCE") || subject.contains("GIFT") ||
-                subject.contains("VOUCHER") || subject.contains("BESTSELLERS") ||
-                subject.contains("CHECK OUT") || subject.contains("SPECIAL VALUE") ||
-                subject.contains("PROMO") || subject.contains("PRICE DROP") ||
-                subject.contains("EXCLUSIVE")) {
-                return "PROMOTIONS";
-            }
-
-            // 5. PURCHASES Check
-            if (subject.contains("RECEIPT") || subject.contains("INVOICE") || 
-                subject.contains("ORDER") || subject.contains("YOUR ORDER") || 
-                subject.contains("PAYMENT") || subject.contains("SHIPPED") ||
-                subject.contains("AMAZON") || subject.contains("FLIPKART") ||
-                subject.contains("BILL") || subject.contains("DELIVERY") ||
-                subject.contains("TRANSACTION") || subject.contains("CONFIRMATION OF ORDER") ||
-                subject.contains("PURCHASE") || subject.contains("TRACKING")) {
-                return "PURCHASES";
-            }
-
-            // 6. UPDATES Check
-            if (isAutoSubmitted || 
-                fromDomain.contains("github.com") || fromDomain.contains("gitlab.com") ||
-                fromDomain.contains("bitbucket.org") || fromDomain.contains("jira.com") ||
-                fromDomain.contains("confluence.com") || fromDomain.contains("trello.com") ||
-                fromDomain.contains("zoom.us") ||
-                fromLocal.equals("no-reply") || fromLocal.equals("noreply") || 
-                fromLocal.equals("donotreply") || fromLocal.equals("support") || 
-                fromLocal.equals("alerts") || fromLocal.equals("system") ||
-                fromLocal.equals("info") || fromLocal.equals("service") ||
-                fromLocal.equals("admin") || fromLocal.equals("billing") ||
-                subject.contains("OTP") || subject.contains("VERIFICATION") || 
-                subject.contains("PASSWORD") || subject.contains("ALERT") || 
-                subject.contains("SECURITY") || subject.contains("ACCOUNT") || 
-                subject.contains("LOGIN") || subject.contains("UNDELIVERED") || 
-                subject.contains("RETURNED TO SENDER") ||
-                subject.contains("STATEMENT") || subject.contains("CONFIRMATION") ||
-                subject.contains("NOTIFICATION") || subject.contains("UPDATE") ||
-                subject.contains("YOUR ACCOUNT") || subject.contains("ACTIVATION") ||
-                subject.contains("RENEWAL") || subject.contains("VERIFY YOUR") ||
-                from.contains("mailer-daemon") || from.contains("postmaster")) {
-                return "UPDATES";
-            }
-
-            // 6. DEFAULT: PRIMARY
-            // Direct human-to-human correspondence
-            return "PRIMARY";
-
+            SpamClassificationResult res = spamClassifierService.classify(message, userEmail);
+            return res.getCategory() != null ? res.getCategory() : "PRIMARY";
         } catch (Exception e) {
             log.warn("Failed to categorize email: {}", e.getMessage());
             return "PRIMARY";
         }
+    }
+
+    private String categorizeEmail(Message message) {
+        return categorizeEmail(message, null);
     }
 
     private String[] extractContent(Message message) throws MessagingException, IOException {
@@ -2417,6 +2296,7 @@ public class MailReceiveService {
                     .build();
             blockedContactRepository.save(blocked);
         }
+        spamClassifierService.recordSenderReputation(userEmail, cleanEmail, "UNSUBSCRIBED", "User unsubscribed from sender");
     }
 
     @Transactional
@@ -2428,6 +2308,7 @@ public class MailReceiveService {
         }
         cleanEmail = cleanEmail.toLowerCase();
         blockedContactRepository.deleteByUserEmailAndBlockedEmail(userEmail, cleanEmail);
+        spamClassifierService.recordSenderReputation(userEmail, cleanEmail, "TRUSTED", "User subscribed to sender");
     }
 
     public List<String> getBlockedSenders(String userEmail) {

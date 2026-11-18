@@ -203,7 +203,7 @@ class CasboxServiceTest {
                         }
                 );
 
-        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo);
         CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
 
         List<com.btctech.mailapp.dto.CasboxMessageDto> thread = service.getThread("alice@example.com", "bob@example.com");
@@ -248,7 +248,7 @@ class CasboxServiceTest {
                         }
                 );
 
-        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo);
         CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
 
         List<com.btctech.mailapp.dto.CasboxMessageDto> all = service.getAllMessages("alice@example.com");
@@ -280,7 +280,7 @@ class CasboxServiceTest {
                         }
                 );
 
-        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo);
         CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
 
         com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();
@@ -319,7 +319,7 @@ class CasboxServiceTest {
                         }
                 );
 
-        BlockedContactService blockedService = new BlockedContactService(blockedRepo, null);
+        BlockedContactService blockedService = new BlockedContactService(blockedRepo);
         CasboxService service = new CasboxService(repo, null, null, null, null, null, blockedService);
 
         com.btctech.mailapp.dto.CasboxSendRequest req = new com.btctech.mailapp.dto.CasboxSendRequest();

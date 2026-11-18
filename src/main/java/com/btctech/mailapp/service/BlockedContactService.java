@@ -2,8 +2,10 @@ package com.btctech.mailapp.service;
 
 import com.btctech.mailapp.dto.BlockedContactDTO;
 import com.btctech.mailapp.entity.BlockedContact;
+import com.btctech.mailapp.entity.SenderReputation;
 import com.btctech.mailapp.entity.User;
 import com.btctech.mailapp.repository.BlockedContactRepository;
+import com.btctech.mailapp.repository.SenderReputationRepository;
 import com.btctech.mailapp.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,7 @@ public class BlockedContactService {
 
     private final BlockedContactRepository blockedContactRepository;
     private final UserRepository userRepository;
+    private final SenderReputationRepository senderReputationRepository;
 
     private static final Pattern EMAIL_PATTERN = Pattern.compile(
             "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
@@ -28,13 +31,15 @@ public class BlockedContactService {
 
     @Autowired
     public BlockedContactService(BlockedContactRepository blockedContactRepository,
-                                 @org.springframework.context.annotation.Lazy UserRepository userRepository) {
+                                 @org.springframework.context.annotation.Lazy UserRepository userRepository,
+                                 @org.springframework.context.annotation.Lazy SenderReputationRepository senderReputationRepository) {
         this.blockedContactRepository = blockedContactRepository;
         this.userRepository = userRepository;
+        this.senderReputationRepository = senderReputationRepository;
     }
 
     public BlockedContactService(BlockedContactRepository blockedContactRepository) {
-        this(blockedContactRepository, null);
+        this(blockedContactRepository, null, null);
     }
 
     /**
@@ -107,6 +112,24 @@ public class BlockedContactService {
             } else {
                 log.info("Sender '{}' is already blocked for user '{}'", normalizedSender, normalizedUser);
             }
+
+            if (senderReputationRepository != null) {
+                senderReputationRepository.findByUserEmailAndSenderEmail(normalizedUser, normalizedSender)
+                        .ifPresentOrElse(rep -> {
+                            rep.setStatus("BLOCKED");
+                            rep.setNotes("User manually blocked sender");
+                            rep.setUpdatedAt(LocalDateTime.now());
+                            senderReputationRepository.save(rep);
+                        }, () -> {
+                            senderReputationRepository.save(SenderReputation.builder()
+                                    .userEmail(normalizedUser)
+                                    .senderEmail(normalizedSender)
+                                    .status("BLOCKED")
+                                    .notes("User manually blocked sender")
+                                    .updatedAt(LocalDateTime.now())
+                                    .build());
+                        });
+            }
         } catch (Exception e) {
             log.error("Database error blocking sender '{}' for user '{}': {}", normalizedSender, normalizedUser, e.getMessage(), e);
             throw new RuntimeException("Failed to save blocked contact: " + e.getMessage(), e);
@@ -134,6 +157,12 @@ public class BlockedContactService {
             String rawSender = normalizeEmail(rawSenderEmail);
             if (rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender)) {
                 blockedContactRepository.deleteByUserEmailAndBlockedEmail(normalizedUser, rawSender);
+            }
+            if (senderReputationRepository != null) {
+                senderReputationRepository.deleteByUserEmailAndSenderEmail(normalizedUser, normalizedSender);
+                if (rawSender != null && !rawSender.equalsIgnoreCase(normalizedSender)) {
+                    senderReputationRepository.deleteByUserEmailAndSenderEmail(normalizedUser, rawSender);
+                }
             }
             log.info("✓ Unblocked sender '{}' for user '{}'", normalizedSender, normalizedUser);
         } catch (Exception e) {
