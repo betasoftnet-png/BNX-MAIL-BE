@@ -427,14 +427,17 @@ public class RecipientSuggestionService {
                     MailAccount acc = accOpt.get();
                     if (Boolean.TRUE.equals(acc.getActive())) {
                         String name = acc.getEmailName();
+                        String avatarUrl = null;
                         if (userRepository != null && acc.getUserId() != null) {
                             try {
                                 Optional<User> uOpt = userRepository.findById(acc.getUserId());
                                 if (uOpt.isPresent() && !Boolean.FALSE.equals(uOpt.get().getActive())) {
-                                    String fn = getFullName(uOpt.get());
+                                    User u = uOpt.get();
+                                    String fn = getFullName(u);
                                     if (fn != null && !fn.trim().isEmpty()) {
                                         name = fn.trim();
                                     }
+                                    avatarUrl = resolveAvatarUrl(u, cleanEmail);
                                 }
                             } catch (Exception ignored) {}
                         }
@@ -443,6 +446,7 @@ public class RecipientSuggestionService {
                                 .email(cleanEmail)
                                 .source("BNXMAIL_USER")
                                 .category("DATABASE_USER")
+                                .avatarUrl(avatarUrl)
                                 .isPreviousContact(false)
                                 .count(0)
                                 .build());
@@ -453,12 +457,15 @@ public class RecipientSuggestionService {
             }
         }
 
-        // 2. Search User by email or username
+        // 2. Search User by email, recoveryEmail, or username
         if (userRepository != null) {
             try {
                 Optional<User> uOpt = userRepository.findByMailAccountEmailIgnoreCase(cleanEmail);
                 if (uOpt.isEmpty()) {
                     uOpt = userRepository.findFirstByEmailIgnoreCase(cleanEmail);
+                }
+                if (uOpt.isEmpty()) {
+                    uOpt = userRepository.findFirstByRecoveryEmailIgnoreCase(cleanEmail);
                 }
                 if (uOpt.isEmpty() && isBnxmailDomain(cleanEmail, bnxDomains)) {
                     String username = cleanEmail.substring(0, cleanEmail.indexOf("@"));
@@ -468,11 +475,13 @@ public class RecipientSuggestionService {
                     User u = uOpt.get();
                     if (!Boolean.FALSE.equals(u.getActive())) {
                         String name = getFullName(u);
+                        String avatarUrl = resolveAvatarUrl(u, cleanEmail);
                         return Optional.of(RecipientSuggestionDTO.builder()
                                 .name(name != null && !name.trim().isEmpty() ? name : u.getUsername())
                                 .email(cleanEmail)
                                 .source("BNXMAIL_USER")
                                 .category("DATABASE_USER")
+                                .avatarUrl(avatarUrl)
                                 .isPreviousContact(false)
                                 .count(0)
                                 .build());
@@ -484,6 +493,18 @@ public class RecipientSuggestionService {
         }
 
         return Optional.empty();
+    }
+
+    private String resolveAvatarUrl(User user, String cleanEmail) {
+        if (user == null) return null;
+        if (user.getProfilePicture() != null && !user.getProfilePicture().trim().isEmpty()) {
+            String pic = user.getProfilePicture().trim();
+            if (pic.startsWith("data:") || pic.startsWith("http://") || pic.startsWith("https://")) {
+                return pic;
+            }
+            return "/api/users/profile-picture/" + cleanEmail;
+        }
+        return null;
     }
 
     /**

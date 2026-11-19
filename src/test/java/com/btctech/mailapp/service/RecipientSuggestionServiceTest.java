@@ -263,6 +263,50 @@ class RecipientSuggestionServiceTest {
     }
 
     @Test
+    @DisplayName("Stage 2: Should lookup registered user with external email (e.g. vijibabu1225@gmail.com) and profile picture")
+    void testRegisteredUserLookupWithGmailAndProfilePicture() {
+        CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> Collections.emptyList()
+        );
+
+        User vijiUser = new User();
+        vijiUser.setId(301L);
+        vijiUser.setUsername("vijibabu");
+        vijiUser.setDisplayName("Viji Babu");
+        vijiUser.setEmail("vijibabu1225@gmail.com");
+        vijiUser.setProfilePicture("https://example.com/avatar.jpg");
+        vijiUser.setActive(true);
+
+        UserRepository userRepo = (UserRepository) Proxy.newProxyInstance(
+                UserRepository.class.getClassLoader(),
+                new Class<?>[]{UserRepository.class},
+                (proxy, method, args) -> {
+                    if ("findByMailAccountEmailIgnoreCase".equals(method.getName()) || "findFirstByEmailIgnoreCase".equals(method.getName())) {
+                        String email = (String) args[0];
+                        if ("vijibabu1225@gmail.com".equalsIgnoreCase(email)) {
+                            return Optional.of(vijiUser);
+                        }
+                    }
+                    return Optional.empty();
+                }
+        );
+
+        RecipientSuggestionService service = new RecipientSuggestionService(
+                userRepo, null, createDomainRepo(), casboxRepo, null, null
+        );
+
+        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "vijibabu1225@gmail.com", 10);
+        assertFalse(results.isEmpty());
+        assertEquals(1, results.size());
+        assertEquals("vijibabu1225@gmail.com", results.get(0).getEmail());
+        assertEquals("Viji Babu", results.get(0).getName());
+        assertEquals("https://example.com/avatar.jpg", results.get(0).getAvatarUrl());
+        assertEquals("DATABASE_USER", results.get(0).getCategory());
+    }
+
+    @Test
     @DisplayName("Should exclude current logged-in user from suggestions")
     void testExcludeCurrentUser() {
         CasboxMessage selfMsg = new CasboxMessage();

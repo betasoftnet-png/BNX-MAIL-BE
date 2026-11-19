@@ -14,6 +14,7 @@ public class RecipientSuggestionDTO {
     private String email;
     private String source; // "INBOX", "SENT", "BNXMAIL_USER", "NEW_RECIPIENT", etc.
     private String category; // "INBOX", "SENT", "DATABASE_USER", "NEW_RECIPIENT", etc.
+    private String avatarUrl; // Profile picture URL or data URI if available
     private boolean isPreviousContact;
     private int count;
 }
