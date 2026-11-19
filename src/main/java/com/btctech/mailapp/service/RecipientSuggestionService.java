@@ -108,7 +108,9 @@ public class RecipientSuggestionService {
         switch (category.toUpperCase()) {
             case "INBOX": return 1;
             case "SENT": return 2;
-            case "STARRED": return 3;
+            case "BNXMAIL_USER":
+            case "DATABASE_USER": return 3;
+            case "STARRED":
             case "SAVED_CONTACT":
             case "CONTACT":
             case "PREVIOUS_CONTACT":
@@ -120,19 +122,22 @@ public class RecipientSuggestionService {
 
     /**
      * Search recipients matching query.
-     * Suggestion Priority:
-     * 1. Existing Inbox contacts (people who sent emails to user).
-     * 2. Previously contacted Sent recipients (people user sent emails to).
-     * 3. Starred email contacts.
-     * 4. Saved contacts (accepted connections and casbox contacts).
-     * 5. Newly typed, complete and syntactically valid email addresses.
-     *
-     * Note: Entire database is NEVER searched or exposed.
+     * Two-Stage Architecture:
+     * Stage 1: Existing communication contacts (Inbox -> Sent -> Starred -> Saved).
+     * Stage 2: Database lookup ONLY when query is a complete valid email address with supported domain ending.
      */
     public List<RecipientSuggestionDTO> searchRecipients(String currentUserEmail,
                                                          String authToken,
                                                          String query,
                                                          int limit) {
+        return searchRecipients(currentUserEmail, authToken, query, limit, null);
+    }
+
+    public List<RecipientSuggestionDTO> searchRecipients(String currentUserEmail,
+                                                         String authToken,
+                                                         String query,
+                                                         int limit,
+                                                         String mode) {
         if (query == null || query.trim().isEmpty()) {
             return Collections.emptyList();
         }
@@ -140,8 +145,19 @@ public class RecipientSuggestionService {
         String cleanQuery = query.trim().toLowerCase();
         String myEmail = currentUserEmail != null ? currentUserEmail.trim().toLowerCase() : "";
         int maxResults = limit > 0 ? limit : 10;
+        boolean contactsOnly = "contacts".equalsIgnoreCase(mode);
+        boolean databaseOnly = "database".equalsIgnoreCase(mode);
 
-        // 1. Priority 1-4: Retrieve and filter existing communication contacts and saved contacts
+        // If mode=database: only lookup database user for complete valid email
+        if (databaseOnly) {
+            if (!isValidEmailAddress(cleanQuery)) {
+                return Collections.emptyList();
+            }
+            Optional<RecipientSuggestionDTO> dbUser = lookupRegisteredUser(cleanQuery, myEmail);
+            return dbUser.map(List::of).orElseGet(Collections::emptyList);
+        }
+
+        // Stage 1: Retrieve and filter existing communication contacts (Inbox, Sent, Starred, Saved)
         List<RecipientSuggestionDTO> allPreviousContacts = getPreviousContacts(myEmail, authToken);
         List<RecipientSuggestionDTO> matchingPreviousContacts = filterAndSortPreviousContacts(allPreviousContacts, cleanQuery, myEmail);
 
@@ -162,15 +178,30 @@ public class RecipientSuggestionService {
             }
         }
 
-        // 2. Priority 5: If query is a complete and valid email address not already present, provide Add Recipient option
+        // If contactsOnly mode was requested, return only communication contacts
+        if (contactsOnly) {
+            return combined;
+        }
+
+        // Stage 2: For users not found in Inbox or Sent:
+        // Trigger database lookup ONLY when user enters a complete email with valid domain ending
         if (isValidEmailAddress(cleanQuery) && !seenEmails.contains(cleanQuery) && combined.size() < maxResults) {
-            combined.add(RecipientSuggestionDTO.builder()
-                    .name(cleanQuery.split("@")[0])
-                    .email(cleanQuery)
-                    .source("NEW_RECIPIENT")
-                    .isPreviousContact(false)
-                    .count(0)
-                    .build());
+            // Priority 3: Matching registered database user
+            Optional<RecipientSuggestionDTO> dbUser = lookupRegisteredUser(cleanQuery, myEmail);
+            if (dbUser.isPresent()) {
+                combined.add(dbUser.get());
+                seenEmails.add(cleanQuery);
+            } else {
+                // Priority 4: Manual new email recipient if no registered match exists
+                combined.add(RecipientSuggestionDTO.builder()
+                        .name(cleanQuery.split("@")[0])
+                        .email(cleanQuery)
+                        .source("NEW_RECIPIENT")
+                        .category("NEW_RECIPIENT")
+                        .isPreviousContact(false)
+                        .count(0)
+                        .build());
+            }
         }
 
         return combined;
@@ -371,6 +402,88 @@ public class RecipientSuggestionService {
                     return aEmail.compareTo(bEmail);
                 })
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Stage 2: Lookup registered database user for an exact, complete email address.
+     * Searches MailAccount and User tables for active registered accounts.
+     */
+    public Optional<RecipientSuggestionDTO> lookupRegisteredUser(String email, String currentUserEmail) {
+        if (email == null || !isValidEmailAddress(email)) {
+            return Optional.empty();
+        }
+        String cleanEmail = email.trim().toLowerCase();
+        if (currentUserEmail != null && cleanEmail.equalsIgnoreCase(currentUserEmail.trim())) {
+            return Optional.empty();
+        }
+
+        Set<String> bnxDomains = getBnxmailDomains();
+
+        // 1. Search MailAccount by exact email
+        if (mailAccountRepository != null) {
+            try {
+                Optional<MailAccount> accOpt = mailAccountRepository.findByEmail(cleanEmail);
+                if (accOpt.isPresent()) {
+                    MailAccount acc = accOpt.get();
+                    if (Boolean.TRUE.equals(acc.getActive())) {
+                        String name = acc.getEmailName();
+                        if (userRepository != null && acc.getUserId() != null) {
+                            try {
+                                Optional<User> uOpt = userRepository.findById(acc.getUserId());
+                                if (uOpt.isPresent() && !Boolean.FALSE.equals(uOpt.get().getActive())) {
+                                    String fn = getFullName(uOpt.get());
+                                    if (fn != null && !fn.trim().isEmpty()) {
+                                        name = fn.trim();
+                                    }
+                                }
+                            } catch (Exception ignored) {}
+                        }
+                        return Optional.of(RecipientSuggestionDTO.builder()
+                                .name(name != null && !name.trim().isEmpty() ? name : cleanEmail.split("@")[0])
+                                .email(cleanEmail)
+                                .source("BNXMAIL_USER")
+                                .category("DATABASE_USER")
+                                .isPreviousContact(false)
+                                .count(0)
+                                .build());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Error looking up mail account for {}: {}", cleanEmail, e.getMessage());
+            }
+        }
+
+        // 2. Search User by email or username
+        if (userRepository != null) {
+            try {
+                Optional<User> uOpt = userRepository.findByMailAccountEmailIgnoreCase(cleanEmail);
+                if (uOpt.isEmpty()) {
+                    uOpt = userRepository.findFirstByEmailIgnoreCase(cleanEmail);
+                }
+                if (uOpt.isEmpty() && isBnxmailDomain(cleanEmail, bnxDomains)) {
+                    String username = cleanEmail.substring(0, cleanEmail.indexOf("@"));
+                    uOpt = userRepository.findByUsernameIgnoreCase(username);
+                }
+                if (uOpt.isPresent()) {
+                    User u = uOpt.get();
+                    if (!Boolean.FALSE.equals(u.getActive())) {
+                        String name = getFullName(u);
+                        return Optional.of(RecipientSuggestionDTO.builder()
+                                .name(name != null && !name.trim().isEmpty() ? name : u.getUsername())
+                                .email(cleanEmail)
+                                .source("BNXMAIL_USER")
+                                .category("DATABASE_USER")
+                                .isPreviousContact(false)
+                                .count(0)
+                                .build());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Error looking up user for {}: {}", cleanEmail, e.getMessage());
+            }
+        }
+
+        return Optional.empty();
     }
 
     /**
@@ -622,9 +735,10 @@ public class RecipientSuggestionService {
             if (name != null && !name.trim().isEmpty() && !name.equalsIgnoreCase(normEmail.split("@")[0])) {
                 existing.setName(name.trim());
             }
-            int existingPriority = getCategoryPriority(existing.getSource());
+            int existingPriority = getCategoryPriority(existing.getCategory() != null ? existing.getCategory() : existing.getSource());
             if (newPriority < existingPriority) {
                 existing.setSource(assignedCategory);
+                existing.setCategory(assignedCategory);
             }
         } else {
             String displayName = (name != null && !name.trim().isEmpty()) ? name.trim() : normEmail.split("@")[0];
@@ -632,6 +746,7 @@ public class RecipientSuggestionService {
                     .name(displayName)
                     .email(normEmail)
                     .source(assignedCategory)
+                    .category(assignedCategory)
                     .isPreviousContact(true)
                     .count(1)
                     .build());

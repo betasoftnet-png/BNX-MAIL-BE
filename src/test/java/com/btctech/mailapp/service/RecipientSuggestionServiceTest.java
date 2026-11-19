@@ -138,35 +138,128 @@ class RecipientSuggestionServiceTest {
         );
 
         // Incomplete addresses must not trigger Add Recipient option
-        List<RecipientSuggestionDTO> r1 = service.searchRecipients(CURRENT_USER, null, "dellibabu", 10);
+        List<RecipientSuggestionDTO> r1 = service.searchRecipients(CURRENT_USER, null, "sri", 10);
         assertTrue(r1.isEmpty());
 
-        List<RecipientSuggestionDTO> r2 = service.searchRecipients(CURRENT_USER, null, "dellibabu@", 10);
+        List<RecipientSuggestionDTO> r2 = service.searchRecipients(CURRENT_USER, null, "sri@", 10);
         assertTrue(r2.isEmpty());
 
-        List<RecipientSuggestionDTO> r3 = service.searchRecipients(CURRENT_USER, null, "dellibabu@bnxmail", 10);
+        List<RecipientSuggestionDTO> r3 = service.searchRecipients(CURRENT_USER, null, "sri@bnxmail", 10);
         assertTrue(r3.isEmpty());
+
+        List<RecipientSuggestionDTO> r4 = service.searchRecipients(CURRENT_USER, null, "sri@bnxmail.c", 10);
+        assertTrue(r4.isEmpty());
     }
 
     @Test
-    @DisplayName("Should suggest Add Recipient only when a complete, syntactically valid email is entered")
-    void testCompleteValidEmailSuggestsNewRecipient() {
+    @DisplayName("Stage 2: Should lookup and return matching registered database user when complete email is entered")
+    void testStage2RegisteredDatabaseUserLookup() {
         CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
                 CasboxMessageRepository.class.getClassLoader(),
                 new Class<?>[]{CasboxMessageRepository.class},
                 (proxy, method, args) -> Collections.emptyList()
         );
 
-        RecipientSuggestionService service = new RecipientSuggestionService(
-                null, null, createDomainRepo(), casboxRepo, null, null
+        User bnxUser = new User();
+        bnxUser.setId(201L);
+        bnxUser.setUsername("sri");
+        bnxUser.setFirstName("Sri");
+        bnxUser.setLastName("Dev");
+        bnxUser.setEmail("sri@bnxmail.com");
+        bnxUser.setActive(true);
+
+        UserRepository userRepo = (UserRepository) Proxy.newProxyInstance(
+                UserRepository.class.getClassLoader(),
+                new Class<?>[]{UserRepository.class},
+                (proxy, method, args) -> {
+                    if ("findByMailAccountEmailIgnoreCase".equals(method.getName()) || "findFirstByEmailIgnoreCase".equals(method.getName())) {
+                        String email = (String) args[0];
+                        if ("sri@bnxmail.com".equalsIgnoreCase(email)) {
+                            return Optional.of(bnxUser);
+                        }
+                    }
+                    return Optional.empty();
+                }
         );
 
-        // Complete, valid email must trigger Add Recipient option
-        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "dellibabu@bnxmail.com", 10);
+        RecipientSuggestionService service = new RecipientSuggestionService(
+                userRepo, null, createDomainRepo(), casboxRepo, null, null
+        );
+
+        // When user enters complete email sri@bnxmail.com, registered user is found in database
+        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "sri@bnxmail.com", 10);
         assertFalse(results.isEmpty());
-        assertEquals("dellibabu@bnxmail.com", results.get(0).getEmail());
-        assertEquals("NEW_RECIPIENT", results.get(0).getSource());
+        assertEquals(1, results.size());
+        assertEquals("sri@bnxmail.com", results.get(0).getEmail());
+        assertEquals("Sri Dev", results.get(0).getName());
+        assertEquals("BNXMAIL_USER", results.get(0).getSource());
+        assertEquals("DATABASE_USER", results.get(0).getCategory());
         assertFalse(results.get(0).isPreviousContact());
+    }
+
+    @Test
+    @DisplayName("Stage 2: Should suggest Add Recipient when complete email has no matching registered database user")
+    void testCompleteValidEmailSuggestsNewRecipientWhenNotRegistered() {
+        CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> Collections.emptyList()
+        );
+
+        UserRepository userRepo = (UserRepository) Proxy.newProxyInstance(
+                UserRepository.class.getClassLoader(),
+                new Class<?>[]{UserRepository.class},
+                (proxy, method, args) -> Optional.empty()
+        );
+
+        RecipientSuggestionService service = new RecipientSuggestionService(
+                userRepo, null, createDomainRepo(), casboxRepo, null, null
+        );
+
+        // Complete, valid email with no registered user must trigger Add Recipient option
+        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "unregistered@bnxmail.com", 10);
+        assertFalse(results.isEmpty());
+        assertEquals("unregistered@bnxmail.com", results.get(0).getEmail());
+        assertEquals("NEW_RECIPIENT", results.get(0).getSource());
+        assertEquals("NEW_RECIPIENT", results.get(0).getCategory());
+        assertFalse(results.get(0).isPreviousContact());
+    }
+
+    @Test
+    @DisplayName("Stage 2: If address already exists in Inbox/Sent, do not duplicate as database recommendation")
+    void testNoDuplicateDatabaseRecommendationIfInPreviousContacts() {
+        CasboxMessage inboxMsg = new CasboxMessage();
+        inboxMsg.setSenderEmail("sri@bnxmail.com");
+        inboxMsg.setReceiverEmail(CURRENT_USER);
+
+        CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
+                (proxy, method, args) -> List.of(inboxMsg)
+        );
+
+        User bnxUser = new User();
+        bnxUser.setId(201L);
+        bnxUser.setUsername("sri");
+        bnxUser.setEmail("sri@bnxmail.com");
+        bnxUser.setActive(true);
+
+        UserRepository userRepo = (UserRepository) Proxy.newProxyInstance(
+                UserRepository.class.getClassLoader(),
+                new Class<?>[]{UserRepository.class},
+                (proxy, method, args) -> Optional.of(bnxUser)
+        );
+
+        RecipientSuggestionService service = new RecipientSuggestionService(
+                userRepo, null, createDomainRepo(), casboxRepo, null, null
+        );
+
+        // When sri@bnxmail.com is already in Inbox, return only 1 suggestion (Inbox contact), no duplicate DB suggestion
+        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "sri@bnxmail.com", 10);
+        assertEquals(1, results.size());
+        assertEquals("sri@bnxmail.com", results.get(0).getEmail());
+        assertTrue(results.get(0).isPreviousContact());
+        assertNotEquals("DATABASE_USER", results.get(0).getCategory());
     }
 
     @Test

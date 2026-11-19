@@ -12,7 +12,8 @@ import lombok.NoArgsConstructor;
 public class RecipientSuggestionDTO {
     private String name;
     private String email;
-    private String source; // "PREVIOUS_CONTACT" or "BNXMAIL_USER"
+    private String source; // "INBOX", "SENT", "BNXMAIL_USER", "NEW_RECIPIENT", etc.
+    private String category; // "INBOX", "SENT", "DATABASE_USER", "NEW_RECIPIENT", etc.
     private boolean isPreviousContact;
     private int count;
 }

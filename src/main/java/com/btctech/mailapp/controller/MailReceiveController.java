@@ -1245,23 +1245,42 @@ public class MailReceiveController {
 
     /**
      * Smart recipient autocomplete endpoint
-     * Priority 1: Previously contacted users (Sent / Received emails + Casbox)
-     * Fallback: Registered BNXmail users from database
+     * Stage 1: Previously contacted users (Inbox & Sent emails + Casbox)
+     * Stage 2: Database lookup ONLY when complete valid email is provided
      */
     @GetMapping({"/recipients/autocomplete", "/autocomplete-recipients"})
     public ResponseEntity<ApiResponse<List<com.btctech.mailapp.dto.RecipientSuggestionDTO>>> autocompleteRecipients(
             @RequestParam(required = false, defaultValue = "") String query,
             @RequestParam(required = false, defaultValue = "10") int limit,
+            @RequestParam(required = false, defaultValue = "") String mode,
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             Authentication authentication) {
         try {
             String currentUserEmail = authentication != null ? authentication.getName() : "";
             List<com.btctech.mailapp.dto.RecipientSuggestionDTO> suggestions =
-                    recipientSuggestionService.searchRecipients(currentUserEmail, authHeader, query, limit);
+                    recipientSuggestionService.searchRecipients(currentUserEmail, authHeader, query, limit, mode);
             return ResponseEntity.ok(ApiResponse.success(suggestions, "Recipient suggestions retrieved successfully"));
         } catch (Exception e) {
             log.error("Error during recipient autocomplete for query '{}': {}", query, e.getMessage(), e);
             return ResponseEntity.ok(ApiResponse.success(java.util.Collections.emptyList(), "Failed to fetch recipient suggestions"));
+        }
+    }
+
+    /**
+     * Stage 2: Explicit lookup for a registered database user by exact complete email.
+     */
+    @GetMapping({"/recipients/lookup-user", "/lookup-user"})
+    public ResponseEntity<ApiResponse<com.btctech.mailapp.dto.RecipientSuggestionDTO>> lookupRecipientUser(
+            @RequestParam(required = false, defaultValue = "") String email,
+            Authentication authentication) {
+        try {
+            String currentUserEmail = authentication != null ? authentication.getName() : "";
+            java.util.Optional<com.btctech.mailapp.dto.RecipientSuggestionDTO> userOpt =
+                    recipientSuggestionService.lookupRegisteredUser(email, currentUserEmail);
+            return ResponseEntity.ok(ApiResponse.success(userOpt.orElse(null), "Recipient user lookup completed"));
+        } catch (Exception e) {
+            log.error("Error during recipient user lookup for email '{}': {}", email, e.getMessage(), e);
+            return ResponseEntity.ok(ApiResponse.success(null, "Failed to lookup recipient user"));
         }
     }
 }
