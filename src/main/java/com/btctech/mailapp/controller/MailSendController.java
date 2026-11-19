@@ -17,7 +17,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -32,10 +34,12 @@ public class MailSendController {
     private final UserService userService;
     private final com.btctech.mailapp.repository.ScheduledEmailRepository scheduledEmailRepository;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final com.btctech.mailapp.service.PendingEmailService pendingEmailService;
 
     /**
      * Send email - NO PASSWORD NEEDED in request!
      * Authorization header provides context to retrieve password from session.
+     * Supports 5-second delayed email delivery with Undo Send and View Message.
      */
     @PostMapping("/send")
     public ResponseEntity<ApiResponse<Map<String, Object>>> sendMail(
@@ -71,10 +75,41 @@ public class MailSendController {
                         .body(ApiResponse.error("Email account not found or disabled"));
             }
 
-            // Execute send
-            String sentUid = mailSendService.sendMail(fromEmail, password, request);
+            User user = userService.getUserByEmailOrUsername(fromEmail);
+            Long userId = user != null ? user.getId() : null;
 
+            int delaySeconds = request.getUndoDelay() != null ? request.getUndoDelay() : 5;
             boolean isStarred = Boolean.TRUE.equals(request.getIsStarred()) || Boolean.TRUE.equals(request.getStarred());
+
+            if (delaySeconds > 0) {
+                // Delayed delivery with 5-second Undo Send window
+                com.btctech.mailapp.entity.PendingEmail pending = pendingEmailService.queuePendingEmail(
+                        fromEmail, userId, mailAccount.getId(), password, request, delaySeconds);
+
+                long expiresAt = java.time.ZonedDateTime.of(pending.getScheduledAt(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+
+                Map<String, Object> data = new HashMap<>();
+                data.put("sendId", pending.getSendId());
+                data.put("status", pending.getStatus());
+                data.put("delaySeconds", delaySeconds);
+                data.put("expiresAt", expiresAt);
+                data.put("from", fromEmail);
+                data.put("to", request.getTo());
+                data.put("cc", request.getCc());
+                data.put("bcc", request.getBcc());
+                data.put("subject", request.getSubject());
+                data.put("body", request.getBody());
+                data.put("isHtml", request.getIsHtml());
+                data.put("sentAt", System.currentTimeMillis());
+                data.put("starred", isStarred);
+                data.put("isStarred", isStarred);
+
+                log.info("✓ Email queued with {}s undo window (sendId={}) from {} to {}", delaySeconds, pending.getSendId(), fromEmail, request.getTo());
+                return ResponseEntity.ok(ApiResponse.success(data, "Message sent"));
+            }
+
+            // Immediate send fallback if undoDelay is explicitly 0
+            String sentUid = mailSendService.sendMail(fromEmail, password, request);
 
             // Response payload
             Map<String, Object> data = new HashMap<>();
@@ -89,7 +124,7 @@ public class MailSendController {
             data.put("starred", isStarred);
             data.put("isStarred", isStarred);
 
-            log.info("✓ Email sent successfully from {} to {} (sentUid={}, isStarred={})", fromEmail, request.getTo(), sentUid, isStarred);
+            log.info("✓ Email sent immediately from {} to {} (sentUid={}, isStarred={})", fromEmail, request.getTo(), sentUid, isStarred);
 
             return ResponseEntity.ok(
                     ApiResponse.success(data, "Email sent successfully"));
@@ -104,6 +139,132 @@ public class MailSendController {
             log.error("Error sending email: {}", e.getMessage(), e);
             return ResponseEntity.badRequest()
                     .body(ApiResponse.error("Failed to send email: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Undo Send within the 5-second cancellation window.
+     * Cancels pending delivery and returns original email details for Compose restoration.
+     */
+    @PostMapping({"/undo-send/{sendId}", "/undo/{sendId}"})
+    public ResponseEntity<ApiResponse<Map<String, Object>>> undoSend(
+            @PathVariable String sendId,
+            Authentication authentication) {
+        try {
+            String userEmail = authentication.getName();
+            com.btctech.mailapp.entity.PendingEmail cancelled = pendingEmailService.cancelPendingEmail(sendId, userEmail);
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("sendId", cancelled.getSendId());
+            data.put("status", cancelled.getStatus());
+            data.put("to", cancelled.getToRecipient());
+            data.put("cc", cancelled.getCc());
+            data.put("bcc", cancelled.getBcc());
+            data.put("subject", cancelled.getSubject());
+            data.put("body", cancelled.getBody());
+            data.put("fromName", cancelled.getFromName());
+            data.put("isHtml", cancelled.getIsHtml());
+            data.put("draftUid", cancelled.getDraftUid());
+            data.put("draftId", cancelled.getDraftId());
+            data.put("isStarred", cancelled.getIsStarred());
+            data.put("starred", cancelled.getIsStarred());
+            data.put("attachments", pendingEmailService.parseAttachments(cancelled.getAttachmentsJson()));
+
+            log.info("✓ Undo Send succeeded for sendId: {} by user: {}", sendId, userEmail);
+            return ResponseEntity.ok(ApiResponse.success(data, "Sending cancelled successfully"));
+        } catch (MailException e) {
+            log.warn("Undo send rejected: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
+        } catch (Exception e) {
+            log.error("Undo send error: {}", e.getMessage(), e);
+            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to undo email: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * View pending outgoing message preview and delivery countdown during the 5-second window.
+     */
+    @GetMapping("/pending/{sendId}")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getPendingEmail(
+            @PathVariable String sendId,
+            Authentication authentication) {
+        try {
+            String userEmail = authentication.getName();
+            com.btctech.mailapp.entity.PendingEmail email = pendingEmailService.getPendingEmail(sendId, userEmail)
+                    .orElse(null);
+            if (email == null) {
+                return ResponseEntity.status(404).body(ApiResponse.error("Pending email not found"));
+            }
+
+            long expiresAt = java.time.ZonedDateTime.of(email.getScheduledAt(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+            long now = System.currentTimeMillis();
+            int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("sendId", email.getSendId());
+            data.put("status", email.getStatus());
+            data.put("from", email.getUserEmail());
+            data.put("fromName", email.getFromName());
+            data.put("to", email.getToRecipient());
+            data.put("cc", email.getCc());
+            data.put("bcc", email.getBcc());
+            data.put("subject", email.getSubject());
+            data.put("body", email.getBody());
+            data.put("isHtml", email.getIsHtml());
+            data.put("draftUid", email.getDraftUid());
+            data.put("draftId", email.getDraftId());
+            data.put("attachments", pendingEmailService.parseAttachments(email.getAttachmentsJson()));
+            data.put("expiresAt", expiresAt);
+            data.put("remainingSeconds", remainingSeconds);
+            data.put("isStarred", email.getIsStarred());
+            data.put("starred", email.getIsStarred());
+
+            return ResponseEntity.ok(ApiResponse.success(data, "Pending email details"));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to get pending email: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Get all active PENDING_UNDO emails for the authenticated user.
+     * Enables restoring Undo Send countdown on page refresh or navigation.
+     */
+    @GetMapping("/pending")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getActivePendingEmails(Authentication authentication) {
+        try {
+            String userEmail = authentication.getName();
+            List<com.btctech.mailapp.entity.PendingEmail> list = pendingEmailService.getActivePendingEmails(userEmail);
+            List<Map<String, Object>> result = new ArrayList<>();
+            long now = System.currentTimeMillis();
+
+            for (com.btctech.mailapp.entity.PendingEmail email : list) {
+                long expiresAt = java.time.ZonedDateTime.of(email.getScheduledAt(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+                int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
+
+                Map<String, Object> data = new HashMap<>();
+                data.put("sendId", email.getSendId());
+                data.put("status", email.getStatus());
+                data.put("from", email.getUserEmail());
+                data.put("fromName", email.getFromName());
+                data.put("to", email.getToRecipient());
+                data.put("cc", email.getCc());
+                data.put("bcc", email.getBcc());
+                data.put("subject", email.getSubject());
+                data.put("body", email.getBody());
+                data.put("isHtml", email.getIsHtml());
+                data.put("draftUid", email.getDraftUid());
+                data.put("draftId", email.getDraftId());
+                data.put("attachments", pendingEmailService.parseAttachments(email.getAttachmentsJson()));
+                data.put("expiresAt", expiresAt);
+                data.put("remainingSeconds", remainingSeconds);
+                data.put("isStarred", email.getIsStarred());
+                data.put("starred", email.getIsStarred());
+                result.add(data);
+            }
+
+            return ResponseEntity.ok(ApiResponse.success(result, "Active pending emails"));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to retrieve pending emails: " + e.getMessage()));
         }
     }
 

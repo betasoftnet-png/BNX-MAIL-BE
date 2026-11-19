@@ -112,6 +112,38 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """);
 
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS pending_emails (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    send_id VARCHAR(64) NOT NULL UNIQUE,
+                    user_email VARCHAR(150) NOT NULL,
+                    user_id BIGINT,
+                    mail_account_id BIGINT,
+                    encrypted_password TEXT,
+                    to_recipient TEXT NOT NULL,
+                    cc_recipient TEXT,
+                    bcc_recipient TEXT,
+                    subject VARCHAR(500),
+                    body LONGTEXT,
+                    from_name VARCHAR(150),
+                    is_html BOOLEAN DEFAULT TRUE,
+                    attachments_json LONGTEXT,
+                    draft_uid VARCHAR(100),
+                    draft_id BIGINT,
+                    is_starred BOOLEAN DEFAULT FALSE,
+                    status VARCHAR(32) NOT NULL DEFAULT 'PENDING_UNDO',
+                    scheduled_at TIMESTAMP NOT NULL,
+                    sent_at TIMESTAMP NULL,
+                    sent_uid VARCHAR(100),
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    version BIGINT DEFAULT 0,
+                    INDEX idx_pending_user_status (user_email, status),
+                    INDEX idx_pending_status_scheduled (status, scheduled_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
             try {
                 jdbcTemplate.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_totp_step BIGINT NULL");
             } catch (Exception ignoreEx) {

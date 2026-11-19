@@ -70,4 +70,8 @@ public class SendMailRequest {
     public void setStarred(Boolean starred) {
         this.isStarred = starred;
     }
+
+    private String sendId;
+
+    private Integer undoDelay;
 }
