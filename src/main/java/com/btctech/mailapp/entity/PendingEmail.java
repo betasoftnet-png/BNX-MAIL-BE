@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 @Table(name = "pending_emails", indexes = {
     @Index(name = "idx_pending_send_id", columnList = "send_id", unique = true),
     @Index(name = "idx_pending_user_status", columnList = "user_email, status"),
-    @Index(name = "idx_pending_status_scheduled", columnList = "status, scheduled_at")
+    @Index(name = "idx_pending_status_deadline", columnList = "status, undo_deadline")
 })
 @Data
 @Builder
@@ -80,8 +80,8 @@ public class PendingEmail {
     @Builder.Default
     private String status = "PENDING_UNDO";
 
-    @Column(name = "scheduled_at", nullable = false)
-    private LocalDateTime scheduledAt;
+    @Column(name = "undo_deadline", nullable = false)
+    private LocalDateTime undoDeadline;
 
     @Column(name = "sent_at")
     private LocalDateTime sentAt;
@@ -102,4 +102,15 @@ public class PendingEmail {
 
     @Version
     private Long version;
+
+    /**
+     * Compatibility getter/setter for scheduled delivery time
+     */
+    public LocalDateTime getScheduledAt() {
+        return undoDeadline;
+    }
+
+    public void setScheduledAt(LocalDateTime scheduledAt) {
+        this.undoDeadline = scheduledAt;
+    }
 }

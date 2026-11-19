@@ -86,12 +86,13 @@ public class MailSendController {
                 com.btctech.mailapp.entity.PendingEmail pending = pendingEmailService.queuePendingEmail(
                         fromEmail, userId, mailAccount.getId(), password, request, delaySeconds);
 
-                long expiresAt = java.time.ZonedDateTime.of(pending.getScheduledAt(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+                long expiresAt = java.time.ZonedDateTime.of(pending.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
 
                 Map<String, Object> data = new HashMap<>();
                 data.put("sendId", pending.getSendId());
                 data.put("status", pending.getStatus());
                 data.put("delaySeconds", delaySeconds);
+                data.put("undoDeadline", pending.getUndoDeadline().toString());
                 data.put("expiresAt", expiresAt);
                 data.put("from", fromEmail);
                 data.put("to", request.getTo());
@@ -196,13 +197,14 @@ public class MailSendController {
                 return ResponseEntity.status(404).body(ApiResponse.error("Pending email not found"));
             }
 
-            long expiresAt = java.time.ZonedDateTime.of(email.getScheduledAt(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+            long expiresAt = java.time.ZonedDateTime.of(email.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
             long now = System.currentTimeMillis();
             int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
 
             Map<String, Object> data = new HashMap<>();
             data.put("sendId", email.getSendId());
             data.put("status", email.getStatus());
+            data.put("undoDeadline", email.getUndoDeadline().toString());
             data.put("from", email.getUserEmail());
             data.put("fromName", email.getFromName());
             data.put("to", email.getToRecipient());
@@ -238,12 +240,13 @@ public class MailSendController {
             long now = System.currentTimeMillis();
 
             for (com.btctech.mailapp.entity.PendingEmail email : list) {
-                long expiresAt = java.time.ZonedDateTime.of(email.getScheduledAt(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+                long expiresAt = java.time.ZonedDateTime.of(email.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
                 int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
 
                 Map<String, Object> data = new HashMap<>();
                 data.put("sendId", email.getSendId());
                 data.put("status", email.getStatus());
+                data.put("undoDeadline", email.getUndoDeadline().toString());
                 data.put("from", email.getUserEmail());
                 data.put("fromName", email.getFromName());
                 data.put("to", email.getToRecipient());

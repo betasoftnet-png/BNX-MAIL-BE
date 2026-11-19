@@ -132,7 +132,7 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                     draft_id BIGINT,
                     is_starred BOOLEAN DEFAULT FALSE,
                     status VARCHAR(32) NOT NULL DEFAULT 'PENDING_UNDO',
-                    scheduled_at TIMESTAMP NOT NULL,
+                    undo_deadline TIMESTAMP NOT NULL,
                     sent_at TIMESTAMP NULL,
                     sent_uid VARCHAR(100),
                     error_message TEXT,
@@ -140,9 +140,15 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     version BIGINT DEFAULT 0,
                     INDEX idx_pending_user_status (user_email, status),
-                    INDEX idx_pending_status_scheduled (status, scheduled_at)
+                    INDEX idx_pending_status_deadline (status, undo_deadline)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """);
+
+            try {
+                jdbcTemplate.execute("ALTER TABLE pending_emails ADD COLUMN IF NOT EXISTS undo_deadline TIMESTAMP NULL");
+            } catch (Exception ignoreEx) {
+                // Column may already exist
+            }
 
             try {
                 jdbcTemplate.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_totp_step BIGINT NULL");

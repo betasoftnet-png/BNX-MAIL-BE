@@ -20,8 +20,35 @@ public interface PendingEmailRepository extends JpaRepository<PendingEmail, Long
 
     List<PendingEmail> findByUserEmailAndStatus(String userEmail, String status);
 
-    List<PendingEmail> findByStatusAndScheduledAtBefore(String status, LocalDateTime time);
+    List<PendingEmail> findByStatusAndUndoDeadlineBefore(String status, LocalDateTime time);
 
+    default List<PendingEmail> findByStatusAndScheduledAtBefore(String status, LocalDateTime time) {
+        return findByStatusAndUndoDeadlineBefore(status, time);
+    }
+
+    /**
+     * Atomic cancellation: Only succeeds if status is still PENDING_UNDO AND current server time is strictly before undoDeadline.
+     */
+    @Modifying
+    @Query("UPDATE PendingEmail p SET p.status = 'CANCELLED', p.updatedAt = :now WHERE p.sendId = :sendId AND p.status = 'PENDING_UNDO' AND p.undoDeadline > :now")
+    int cancelIfPendingAndBeforeDeadline(
+            @Param("sendId") String sendId,
+            @Param("now") LocalDateTime now
+    );
+
+    /**
+     * Atomic claim for delivery: Only succeeds if status is still PENDING_UNDO AND undoDeadline has arrived/passed.
+     */
+    @Modifying
+    @Query("UPDATE PendingEmail p SET p.status = 'SENDING', p.updatedAt = :now WHERE p.sendId = :sendId AND p.status = 'PENDING_UNDO' AND p.undoDeadline <= :now")
+    int claimForDeliveryIfDue(
+            @Param("sendId") String sendId,
+            @Param("now") LocalDateTime now
+    );
+
+    /**
+     * General atomic state update query
+     */
     @Modifying
     @Query("UPDATE PendingEmail p SET p.status = :newStatus, p.updatedAt = :now WHERE p.sendId = :sendId AND p.status = :expectedStatus")
     int updateStatusIfCurrentStatus(

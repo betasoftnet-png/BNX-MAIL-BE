@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,11 @@ public class PendingEmailService {
 
     private final ScheduledExecutorService scheduledExecutor = Executors.newScheduledThreadPool(4);
     private final ConcurrentHashMap<String, ScheduledFuture<?>> scheduledTasks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> sendLocks = new ConcurrentHashMap<>();
+
+    private Object getLock(String sendId) {
+        return sendLocks.computeIfAbsent(sendId, k -> new Object());
+    }
 
     /**
      * Enqueue an email with 5-second undo send delay.
@@ -87,7 +94,7 @@ public class PendingEmailService {
         boolean isStarred = Boolean.TRUE.equals(request.getIsStarred()) || Boolean.TRUE.equals(request.getStarred());
 
         LocalDateTime now = LocalDateTime.now();
-        LocalDateTime scheduledAt = now.plusSeconds(Math.max(1, delaySeconds));
+        LocalDateTime undoDeadline = now.plusSeconds(Math.max(1, delaySeconds));
 
         PendingEmail pendingEmail = PendingEmail.builder()
                 .sendId(sendId)
@@ -107,14 +114,14 @@ public class PendingEmailService {
                 .draftId(request.getDraftId() != null ? request.getDraftId() : request.getId())
                 .isStarred(isStarred)
                 .status("PENDING_UNDO")
-                .scheduledAt(scheduledAt)
+                .undoDeadline(undoDeadline)
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
 
         pendingEmail = pendingEmailRepository.save(pendingEmail);
-        log.info("Queued pending email {} from {} to {} with {}s undo window (scheduled at {})",
-                sendId, fromEmail, request.getTo(), delaySeconds, scheduledAt);
+        log.info("Queued pending email {} from {} to {} with {}s undo window (deadline at {})",
+                sendId, fromEmail, request.getTo(), delaySeconds, undoDeadline);
 
         // Schedule exact in-memory trigger
         final String finalSendId = sendId;
@@ -136,127 +143,144 @@ public class PendingEmailService {
 
     /**
      * Cancel a pending email delivery within the 5-second window.
-     * Uses atomic state transition PENDING_UNDO -> CANCELLED to guarantee mutual exclusion with delivery.
+     * Undo succeeds ONLY when the email is still PENDING_UNDO and current server time is strictly before undoDeadline.
+     * Uses atomic state transition PENDING_UNDO -> CANCELLED.
      */
     @Transactional
     public PendingEmail cancelPendingEmail(String sendId, String userEmail) {
         log.info("Cancellation requested for sendId: {} by user: {}", sendId, userEmail);
 
-        // Cancel in-memory scheduled future if still waiting
-        ScheduledFuture<?> future = scheduledTasks.remove(sendId);
-        if (future != null) {
-            future.cancel(false);
-        }
+        synchronized (getLock(sendId)) {
+            // Cancel in-memory scheduled future if still waiting
+            ScheduledFuture<?> future = scheduledTasks.remove(sendId);
+            if (future != null) {
+                future.cancel(false);
+            }
 
-        LocalDateTime now = LocalDateTime.now();
-        // Atomic DB update: only transitions if current status is PENDING_UNDO
-        int updated = pendingEmailRepository.updateStatusIfCurrentStatus(sendId, "PENDING_UNDO", "CANCELLED", now);
+            LocalDateTime now = LocalDateTime.now();
 
-        if (updated == 1) {
-            log.info("✓ Successfully cancelled pending email {}", sendId);
-            return pendingEmailRepository.findBySendIdAndUserEmail(sendId, userEmail)
+            // Atomic DB update: only succeeds if status is PENDING_UNDO AND undo_deadline > now
+            int updated = pendingEmailRepository.cancelIfPendingAndBeforeDeadline(sendId, now);
+
+            if (updated == 1) {
+                log.info("✓ Successfully cancelled pending email {}", sendId);
+                sendLocks.remove(sendId);
+                return pendingEmailRepository.findBySendIdAndUserEmail(sendId, userEmail)
+                        .orElseThrow(() -> new MailException("Pending email not found"));
+            }
+
+            // Could not update - inspect why to return clear, accurate error response
+            PendingEmail pendingEmail = pendingEmailRepository.findBySendIdAndUserEmail(sendId, userEmail)
                     .orElseThrow(() -> new MailException("Pending email not found"));
+
+            if ("CANCELLED".equalsIgnoreCase(pendingEmail.getStatus())) {
+                log.info("Email {} was already cancelled", sendId);
+                return pendingEmail;
+            }
+
+            if ("SENDING".equalsIgnoreCase(pendingEmail.getStatus()) || "SENT".equalsIgnoreCase(pendingEmail.getStatus())) {
+                log.warn("Cannot cancel sendId {}: Email is already in state {}", sendId, pendingEmail.getStatus());
+                throw new MailException("Message is already being sent or has already been delivered. Undo is no longer available.");
+            }
+
+            if ("PENDING_UNDO".equalsIgnoreCase(pendingEmail.getStatus()) && !now.isBefore(pendingEmail.getUndoDeadline())) {
+                log.warn("Cannot cancel sendId {}: Deadline {} has expired (server time: {})", sendId, pendingEmail.getUndoDeadline(), now);
+                throw new MailException("The 5-second cancellation window has expired. The message is now being sent.");
+            }
+
+            throw new MailException("Cannot undo email with status: " + pendingEmail.getStatus());
         }
-
-        // Could not update - check why
-        PendingEmail pendingEmail = pendingEmailRepository.findBySendIdAndUserEmail(sendId, userEmail)
-                .orElseThrow(() -> new MailException("Pending email not found"));
-
-        if ("CANCELLED".equalsIgnoreCase(pendingEmail.getStatus())) {
-            log.info("Email {} was already cancelled", sendId);
-            return pendingEmail;
-        }
-
-        if ("SENDING".equalsIgnoreCase(pendingEmail.getStatus()) || "SENT".equalsIgnoreCase(pendingEmail.getStatus())) {
-            log.warn("Cannot cancel sendId {}: Email is already in state {}", sendId, pendingEmail.getStatus());
-            throw new MailException("Message is already being sent or has already been delivered. Undo is no longer available.");
-        }
-
-        throw new MailException("Cannot undo email with status: " + pendingEmail.getStatus());
     }
 
     /**
      * Deliver the email to recipient.
+     * Guarantees email is not delivered before undoDeadline.
      * Atomically transitions PENDING_UNDO -> SENDING before initiating SMTP/IMAP send.
      */
     public void deliverPendingEmail(String sendId) {
-        LocalDateTime now = LocalDateTime.now();
-        // Atomic transition: PENDING_UNDO -> SENDING
-        int updated = pendingEmailRepository.updateStatusIfCurrentStatus(sendId, "PENDING_UNDO", "SENDING", now);
-        if (updated == 0) {
-            log.debug("Skip delivery for sendId {}: not in PENDING_UNDO state (already cancelled or sending)", sendId);
-            return;
-        }
+        synchronized (getLock(sendId)) {
+            LocalDateTime now = LocalDateTime.now();
 
-        log.info("Initiating actual email delivery for sendId {}", sendId);
-        PendingEmail pendingEmail = pendingEmailRepository.findBySendId(sendId).orElse(null);
-        if (pendingEmail == null) {
-            log.error("Pending email not found during delivery: {}", sendId);
-            return;
-        }
-
-        try {
-            // Retrieve password
-            String password = null;
-            if (pendingEmail.getEncryptedPassword() != null && !pendingEmail.getEncryptedPassword().isEmpty()) {
-                try {
-                    password = sessionService.decrypt(pendingEmail.getEncryptedPassword());
-                } catch (Exception e) {
-                    log.warn("Failed to decrypt stored password for sendId {}: {}", sendId, e.getMessage());
-                }
+            // Atomic transition: only claims if PENDING_UNDO AND undo_deadline <= now
+            int updated = pendingEmailRepository.claimForDeliveryIfDue(sendId, now);
+            if (updated == 0) {
+                log.debug("Skip delivery for sendId {}: not due or not in PENDING_UNDO state (already cancelled or sending)", sendId);
+                return;
             }
 
-            if (password == null && pendingEmail.getUserId() != null) {
-                password = sessionService.getPasswordByUserId(pendingEmail.getUserId());
+            log.info("Initiating actual email delivery for sendId {}", sendId);
+            PendingEmail pendingEmail = pendingEmailRepository.findBySendId(sendId).orElse(null);
+            if (pendingEmail == null) {
+                log.error("Pending email not found during delivery: {}", sendId);
+                sendLocks.remove(sendId);
+                return;
             }
 
-            if (password == null) {
-                MailAccount mailAccount = mailboxService.getMailAccountByEmail(pendingEmail.getUserEmail());
-                if (mailAccount != null && mailAccount.getEncryptedPassword() != null) {
+            try {
+                // Retrieve password
+                String password = null;
+                if (pendingEmail.getEncryptedPassword() != null && !pendingEmail.getEncryptedPassword().isEmpty()) {
                     try {
-                        password = sessionService.decrypt(mailAccount.getEncryptedPassword());
+                        password = sessionService.decrypt(pendingEmail.getEncryptedPassword());
                     } catch (Exception e) {
-                        log.warn("Failed to decrypt mail account password: {}", e.getMessage());
+                        log.warn("Failed to decrypt stored password for sendId {}: {}", sendId, e.getMessage());
                     }
                 }
-            }
 
-            // Reconstruct SendMailRequest
-            SendMailRequest request = new SendMailRequest();
-            request.setTo(pendingEmail.getToRecipient());
-            request.setCc(pendingEmail.getCc());
-            request.setBcc(pendingEmail.getBcc());
-            request.setSubject(pendingEmail.getSubject());
-            request.setBody(pendingEmail.getBody());
-            request.setFromName(pendingEmail.getFromName());
-            request.setIsHtml(pendingEmail.getIsHtml());
-            request.setDraftUid(pendingEmail.getDraftUid());
-            request.setDraftId(pendingEmail.getDraftId());
-            request.setIsStarred(pendingEmail.getIsStarred());
-            request.setStarred(pendingEmail.getIsStarred());
-
-            if (pendingEmail.getAttachmentsJson() != null && !pendingEmail.getAttachmentsJson().trim().isEmpty()) {
-                try {
-                    List<AttachmentInfo> attachments = objectMapper.readValue(
-                            pendingEmail.getAttachmentsJson(),
-                            new TypeReference<List<AttachmentInfo>>() {}
-                    );
-                    request.setAttachments(attachments);
-                } catch (Exception e) {
-                    log.error("Failed to parse attachments JSON for sendId {}: {}", sendId, e.getMessage());
+                if (password == null && pendingEmail.getUserId() != null) {
+                    password = sessionService.getPasswordByUserId(pendingEmail.getUserId());
                 }
+
+                if (password == null) {
+                    MailAccount mailAccount = mailboxService.getMailAccountByEmail(pendingEmail.getUserEmail());
+                    if (mailAccount != null && mailAccount.getEncryptedPassword() != null) {
+                        try {
+                            password = sessionService.decrypt(mailAccount.getEncryptedPassword());
+                        } catch (Exception e) {
+                            log.warn("Failed to decrypt mail account password: {}", e.getMessage());
+                        }
+                    }
+                }
+
+                // Reconstruct SendMailRequest
+                SendMailRequest request = new SendMailRequest();
+                request.setTo(pendingEmail.getToRecipient());
+                request.setCc(pendingEmail.getCc());
+                request.setBcc(pendingEmail.getBcc());
+                request.setSubject(pendingEmail.getSubject());
+                request.setBody(pendingEmail.getBody());
+                request.setFromName(pendingEmail.getFromName());
+                request.setIsHtml(pendingEmail.getIsHtml());
+                request.setDraftUid(pendingEmail.getDraftUid());
+                request.setDraftId(pendingEmail.getDraftId());
+                request.setIsStarred(pendingEmail.getIsStarred());
+                request.setStarred(pendingEmail.getIsStarred());
+
+                if (pendingEmail.getAttachmentsJson() != null && !pendingEmail.getAttachmentsJson().trim().isEmpty()) {
+                    try {
+                        List<AttachmentInfo> attachments = objectMapper.readValue(
+                                pendingEmail.getAttachmentsJson(),
+                                new TypeReference<List<AttachmentInfo>>() {}
+                        );
+                        request.setAttachments(attachments);
+                    } catch (Exception e) {
+                        log.error("Failed to parse attachments JSON for sendId {}: {}", sendId, e.getMessage());
+                    }
+                }
+
+                // Perform actual email delivery (SMTP send + IMAP Sent archival)
+                String sentUid = mailSendService.sendMail(pendingEmail.getUserEmail(), password, request);
+
+                // Mark as SENT
+                pendingEmailRepository.markSent(sendId, "SENT", sentUid, LocalDateTime.now());
+                log.info("✓ Delivered pending email {} successfully (sentUid={})", sendId, sentUid);
+
+            } catch (Exception e) {
+                log.error("Failed to deliver pending email {}: {}", sendId, e.getMessage(), e);
+                pendingEmailRepository.markFailed(sendId, "FAILED", e.getMessage(), LocalDateTime.now());
+            } finally {
+                sendLocks.remove(sendId);
             }
-
-            // Perform actual email delivery
-            String sentUid = mailSendService.sendMail(pendingEmail.getUserEmail(), password, request);
-
-            // Mark as SENT
-            pendingEmailRepository.markSent(sendId, "SENT", sentUid, LocalDateTime.now());
-            log.info("✓ Delivered pending email {} successfully (sentUid={})", sendId, sentUid);
-
-        } catch (Exception e) {
-            log.error("Failed to deliver pending email {}: {}", sendId, e.getMessage(), e);
-            pendingEmailRepository.markFailed(sendId, "FAILED", e.getMessage(), LocalDateTime.now());
         }
     }
 
@@ -267,7 +291,7 @@ public class PendingEmailService {
     @Scheduled(fixedDelay = 2000)
     public void pollPendingDeliveries() {
         LocalDateTime now = LocalDateTime.now();
-        List<PendingEmail> dueEmails = pendingEmailRepository.findByStatusAndScheduledAtBefore("PENDING_UNDO", now);
+        List<PendingEmail> dueEmails = pendingEmailRepository.findByStatusAndUndoDeadlineBefore("PENDING_UNDO", now);
         if (dueEmails.isEmpty()) {
             return;
         }
@@ -280,6 +304,15 @@ public class PendingEmailService {
                 log.error("Recovery delivery failed for sendId {}: {}", email.getSendId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * Safety recovery on application startup.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void onStartup() {
+        log.info("Checking for any pending emails after startup...");
+        pollPendingDeliveries();
     }
 
     /**
