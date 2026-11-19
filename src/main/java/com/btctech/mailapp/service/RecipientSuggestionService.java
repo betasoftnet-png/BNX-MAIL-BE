@@ -4,12 +4,15 @@ import com.btctech.mailapp.dto.EmailDTO;
 import com.btctech.mailapp.dto.FolderResult;
 import com.btctech.mailapp.dto.RecipientSuggestionDTO;
 import com.btctech.mailapp.entity.CasboxMessage;
+import com.btctech.mailapp.entity.Connection;
 import com.btctech.mailapp.entity.Domain;
 import com.btctech.mailapp.entity.MailAccount;
 import com.btctech.mailapp.entity.User;
 import com.btctech.mailapp.repository.CasboxMessageRepository;
+import com.btctech.mailapp.repository.ConnectionRepository;
 import com.btctech.mailapp.repository.DomainRepository;
 import com.btctech.mailapp.repository.MailAccountRepository;
+import com.btctech.mailapp.repository.StarredEmailRepository;
 import com.btctech.mailapp.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,10 +35,14 @@ public class RecipientSuggestionService {
     private final CasboxMessageRepository casboxMessageRepository;
     private final MailReceiveService mailReceiveService;
     private final SessionService sessionService;
+    private final StarredEmailRepository starredEmailRepository;
+    private final ConnectionRepository connectionRepository;
 
     // In-memory cache for recent contacts per user (5-minute TTL)
     private final Map<String, CachedContacts> contactsCache = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 5 * 60 * 1000L;
+
+    private static final Pattern VALID_EMAIL_PATTERN = Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
 
     private static final Set<String> EXTERNAL_DOMAINS = Set.of(
             "gmail.com", "googlemail.com",
@@ -62,25 +69,65 @@ public class RecipientSuggestionService {
         }
     }
 
-    @Autowired
     public RecipientSuggestionService(UserRepository userRepository,
                                       MailAccountRepository mailAccountRepository,
                                       DomainRepository domainRepository,
                                       CasboxMessageRepository casboxMessageRepository,
                                       MailReceiveService mailReceiveService,
                                       SessionService sessionService) {
+        this(userRepository, mailAccountRepository, domainRepository, casboxMessageRepository, mailReceiveService, sessionService, null, null);
+    }
+
+    @Autowired
+    public RecipientSuggestionService(UserRepository userRepository,
+                                      MailAccountRepository mailAccountRepository,
+                                      DomainRepository domainRepository,
+                                      CasboxMessageRepository casboxMessageRepository,
+                                      MailReceiveService mailReceiveService,
+                                      SessionService sessionService,
+                                      @Autowired(required = false) StarredEmailRepository starredEmailRepository,
+                                      @Autowired(required = false) ConnectionRepository connectionRepository) {
         this.userRepository = userRepository;
         this.mailAccountRepository = mailAccountRepository;
         this.domainRepository = domainRepository;
         this.casboxMessageRepository = casboxMessageRepository;
         this.mailReceiveService = mailReceiveService;
         this.sessionService = sessionService;
+        this.starredEmailRepository = starredEmailRepository;
+        this.connectionRepository = connectionRepository;
+    }
+
+    public static boolean isValidEmailAddress(String email) {
+        if (email == null) return false;
+        String clean = email.trim();
+        return VALID_EMAIL_PATTERN.matcher(clean).matches();
+    }
+
+    public static int getCategoryPriority(String category) {
+        if (category == null) return 4;
+        switch (category.toUpperCase()) {
+            case "INBOX": return 1;
+            case "SENT": return 2;
+            case "STARRED": return 3;
+            case "SAVED_CONTACT":
+            case "CONTACT":
+            case "PREVIOUS_CONTACT":
+                return 4;
+            case "NEW_RECIPIENT": return 5;
+            default: return 4;
+        }
     }
 
     /**
      * Search recipients matching query.
-     * Priority 1: Previously contacted users (from Sent and Received emails + Casbox messages)
-     * Fallback: Registered BNXmail users from the user database (only registered BNXmail domains)
+     * Suggestion Priority:
+     * 1. Existing Inbox contacts (people who sent emails to user).
+     * 2. Previously contacted Sent recipients (people user sent emails to).
+     * 3. Starred email contacts.
+     * 4. Saved contacts (accepted connections and casbox contacts).
+     * 5. Newly typed, complete and syntactically valid email addresses.
+     *
+     * Note: Entire database is NEVER searched or exposed.
      */
     public List<RecipientSuggestionDTO> searchRecipients(String currentUserEmail,
                                                          String authToken,
@@ -94,24 +141,17 @@ public class RecipientSuggestionService {
         String myEmail = currentUserEmail != null ? currentUserEmail.trim().toLowerCase() : "";
         int maxResults = limit > 0 ? limit : 10;
 
-        // 1. Priority 1: Retrieve and filter previously contacted users
+        // 1. Priority 1-4: Retrieve and filter existing communication contacts and saved contacts
         List<RecipientSuggestionDTO> allPreviousContacts = getPreviousContacts(myEmail, authToken);
         List<RecipientSuggestionDTO> matchingPreviousContacts = filterAndSortPreviousContacts(allPreviousContacts, cleanQuery, myEmail);
 
-        // 2. Fallback: Search registered BNXmail users from database
-        List<RecipientSuggestionDTO> fallbackBnxUsers = Collections.emptyList();
-        if (matchingPreviousContacts.isEmpty() || matchingPreviousContacts.size() < maxResults) {
-            fallbackBnxUsers = searchRegisteredBnxmailUsers(cleanQuery, myEmail);
-        }
-
-        // 3. Combine in priority order: previous contacts FIRST, then fallback registered BNXmail users
         List<RecipientSuggestionDTO> combined = new ArrayList<>();
         Set<String> seenEmails = new HashSet<>();
         if (!myEmail.isEmpty()) {
             seenEmails.add(myEmail);
         }
 
-        // Add matching previous contacts first
+        // Add matching existing contacts in strict priority order (Inbox -> Sent -> Starred -> Saved)
         for (RecipientSuggestionDTO contact : matchingPreviousContacts) {
             if (contact != null && contact.getEmail() != null) {
                 String norm = contact.getEmail().trim().toLowerCase();
@@ -122,15 +162,15 @@ public class RecipientSuggestionService {
             }
         }
 
-        // Add fallback registered BNXmail users
-        for (RecipientSuggestionDTO userDto : fallbackBnxUsers) {
-            if (combined.size() >= maxResults) break;
-            if (userDto != null && userDto.getEmail() != null) {
-                String norm = userDto.getEmail().trim().toLowerCase();
-                if (seenEmails.add(norm)) {
-                    combined.add(userDto);
-                }
-            }
+        // 2. Priority 5: If query is a complete and valid email address not already present, provide Add Recipient option
+        if (isValidEmailAddress(cleanQuery) && !seenEmails.contains(cleanQuery) && combined.size() < maxResults) {
+            combined.add(RecipientSuggestionDTO.builder()
+                    .name(cleanQuery.split("@")[0])
+                    .email(cleanQuery)
+                    .source("NEW_RECIPIENT")
+                    .isPreviousContact(false)
+                    .count(0)
+                    .build());
         }
 
         return combined;
@@ -166,7 +206,7 @@ public class RecipientSuggestionService {
                         }
 
                         if (otherEmail != null && !otherEmail.trim().isEmpty()) {
-                            addOrUpdateContact(contactsMap, otherEmail.trim(), null, key);
+                            addOrUpdateContact(contactsMap, otherEmail.trim(), null, key, "SAVED_CONTACT");
                         }
                     }
                 }
@@ -175,36 +215,72 @@ public class RecipientSuggestionService {
             }
         }
 
-        // B. From Sent & Received emails (via IMAP if session available)
+        // B. From Saved Connections
+        if (connectionRepository != null && userRepository != null) {
+            try {
+                Optional<User> meOpt = userRepository.findFirstByEmailIgnoreCase(userEmail);
+                if (meOpt.isPresent()) {
+                    List<Connection> conns = connectionRepository.findAcceptedConnectionsForUser(meOpt.get().getId());
+                    if (conns != null) {
+                        for (Connection c : conns) {
+                            Long otherId = meOpt.get().getId().equals(c.getRequesterId()) ? c.getReceiverId() : c.getRequesterId();
+                            if (otherId != null) {
+                                Optional<User> otherUser = userRepository.findById(otherId);
+                                if (otherUser.isPresent() && otherUser.get().getEmail() != null) {
+                                    addOrUpdateContact(contactsMap, otherUser.get().getEmail(), getFullName(otherUser.get()), key, "SAVED_CONTACT");
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception connEx) {
+                log.debug("Connections contacts sync skipped: {}", connEx.getMessage());
+            }
+        }
+
+        // C. From Email Communication History (Inbox, Sent, Starred) via IMAP if session available
         if (mailReceiveService != null && sessionService != null && authToken != null && !authToken.trim().isEmpty()) {
             try {
                 String cleanToken = authToken.startsWith("Bearer ") ? authToken.substring(7) : authToken;
                 String password = sessionService.getPasswordFromSession(cleanToken);
                 if (password != null && !password.trim().isEmpty()) {
-                    // Sent emails (recipients: to, cc, bcc)
+                    // Priority 1: Inbox received emails (senders)
+                    try {
+                        FolderResult inboxResult = mailReceiveService.getInbox(userEmail, password, 1, 50);
+                        if (inboxResult != null && inboxResult.getEmails() != null) {
+                            for (EmailDTO email : inboxResult.getEmails()) {
+                                processAddressField(contactsMap, email.getFrom(), key, "INBOX");
+                            }
+                        }
+                    } catch (Exception inboxEx) {
+                        log.debug("Inbox folder contacts check skipped: {}", inboxEx.getMessage());
+                    }
+
+                    // Priority 2: Sent emails (recipients: to, cc, bcc)
                     try {
                         FolderResult sentResult = mailReceiveService.getSent(userEmail, password, 1, 50);
                         if (sentResult != null && sentResult.getEmails() != null) {
                             for (EmailDTO email : sentResult.getEmails()) {
-                                processAddressField(contactsMap, email.getTo(), key);
-                                processAddressField(contactsMap, email.getCc(), key);
-                                processAddressField(contactsMap, email.getBcc(), key);
+                                processAddressField(contactsMap, email.getTo(), key, "SENT");
+                                processAddressField(contactsMap, email.getCc(), key, "SENT");
+                                processAddressField(contactsMap, email.getBcc(), key, "SENT");
                             }
                         }
                     } catch (Exception sentEx) {
                         log.debug("Sent folder contacts check skipped: {}", sentEx.getMessage());
                     }
 
-                    // Received emails (senders: from)
+                    // Priority 3: Starred emails
                     try {
-                        FolderResult inboxResult = mailReceiveService.getInbox(userEmail, password, 1, 50);
-                        if (inboxResult != null && inboxResult.getEmails() != null) {
-                            for (EmailDTO email : inboxResult.getEmails()) {
-                                processAddressField(contactsMap, email.getFrom(), key);
+                        FolderResult starredResult = mailReceiveService.getStarred(userEmail, password, 1, 50);
+                        if (starredResult != null && starredResult.getEmails() != null) {
+                            for (EmailDTO email : starredResult.getEmails()) {
+                                processAddressField(contactsMap, email.getFrom(), key, "STARRED");
+                                processAddressField(contactsMap, email.getTo(), key, "STARRED");
                             }
                         }
-                    } catch (Exception inboxEx) {
-                        log.debug("Inbox folder contacts check skipped: {}", inboxEx.getMessage());
+                    } catch (Exception starredEx) {
+                        log.debug("Starred folder contacts check skipped: {}", starredEx.getMessage());
                     }
                 }
             } catch (Exception e) {
@@ -256,35 +332,42 @@ public class RecipientSuggestionService {
                     return emailLower.contains(q) || nameLower.contains(q);
                 })
                 .sorted((a, b) -> {
+                    // 1. Suggestion Priority: 1. Inbox -> 2. Sent -> 3. Starred -> 4. Saved contacts
+                    int aPriority = getCategoryPriority(a.getSource());
+                    int bPriority = getCategoryPriority(b.getSource());
+                    if (aPriority != bPriority) {
+                        return Integer.compare(aPriority, bPriority);
+                    }
+
                     String aEmail = a.getEmail().toLowerCase();
                     String bEmail = b.getEmail().toLowerCase();
                     String aName = a.getName() != null ? a.getName().toLowerCase() : "";
                     String bName = b.getName() != null ? b.getName().toLowerCase() : "";
 
-                    // 1. Email starts with query (e.g. typing 'D' -> 'david@...' first)
+                    // 2. Email starts with query (e.g. typing 'D' -> 'david@...' first)
                     boolean aEmailStarts = aEmail.startsWith(q);
                     boolean bEmailStarts = bEmail.startsWith(q);
                     if (aEmailStarts && !bEmailStarts) return -1;
                     if (!aEmailStarts && bEmailStarts) return 1;
 
-                    // 2. Name starts with query (e.g. typing 'HR' -> 'HR Manager' first)
+                    // 3. Name starts with query (e.g. typing 'HR' -> 'HR Manager' first)
                     boolean aNameStarts = aName.startsWith(q);
                     boolean bNameStarts = bName.startsWith(q);
                     if (aNameStarts && !bNameStarts) return -1;
                     if (!aNameStarts && bNameStarts) return 1;
 
-                    // 3. Any word in name starts with query
+                    // 4. Any word in name starts with query
                     boolean aWordStarts = Arrays.stream(aName.split("\\s+")).anyMatch(w -> w.startsWith(q));
                     boolean bWordStarts = Arrays.stream(bName.split("\\s+")).anyMatch(w -> w.startsWith(q));
                     if (aWordStarts && !bWordStarts) return -1;
                     if (!aWordStarts && bWordStarts) return 1;
 
-                    // 4. Higher contact count / frequency
+                    // 5. Higher contact count / frequency
                     if (a.getCount() != b.getCount()) {
                         return Integer.compare(b.getCount(), a.getCount());
                     }
 
-                    // 5. Alphabetical
+                    // 6. Alphabetical
                     return aEmail.compareTo(bEmail);
                 })
                 .collect(Collectors.toList());
@@ -490,6 +573,10 @@ public class RecipientSuggestionService {
     }
 
     private void processAddressField(Map<String, RecipientSuggestionDTO> map, String addressField, String currentUserEmail) {
+        processAddressField(map, addressField, currentUserEmail, "INBOX");
+    }
+
+    private void processAddressField(Map<String, RecipientSuggestionDTO> map, String addressField, String currentUserEmail, String category) {
         if (addressField == null || addressField.trim().isEmpty()) return;
 
         // Split by comma or semicolon
@@ -512,15 +599,22 @@ public class RecipientSuggestionService {
             }
 
             if (email != null && email.contains("@") && !email.equalsIgnoreCase(currentUserEmail)) {
-                addOrUpdateContact(map, email, name, currentUserEmail);
+                addOrUpdateContact(map, email, name, currentUserEmail, category);
             }
         }
     }
 
     private void addOrUpdateContact(Map<String, RecipientSuggestionDTO> map, String email, String name, String currentUserEmail) {
+        addOrUpdateContact(map, email, name, currentUserEmail, "INBOX");
+    }
+
+    private void addOrUpdateContact(Map<String, RecipientSuggestionDTO> map, String email, String name, String currentUserEmail, String category) {
         if (email == null || email.trim().isEmpty()) return;
         String normEmail = email.trim().toLowerCase();
         if (normEmail.equalsIgnoreCase(currentUserEmail)) return;
+
+        String assignedCategory = category != null ? category.toUpperCase() : "INBOX";
+        int newPriority = getCategoryPriority(assignedCategory);
 
         if (map.containsKey(normEmail)) {
             RecipientSuggestionDTO existing = map.get(normEmail);
@@ -528,12 +622,16 @@ public class RecipientSuggestionService {
             if (name != null && !name.trim().isEmpty() && !name.equalsIgnoreCase(normEmail.split("@")[0])) {
                 existing.setName(name.trim());
             }
+            int existingPriority = getCategoryPriority(existing.getSource());
+            if (newPriority < existingPriority) {
+                existing.setSource(assignedCategory);
+            }
         } else {
             String displayName = (name != null && !name.trim().isEmpty()) ? name.trim() : normEmail.split("@")[0];
             map.put(normEmail, RecipientSuggestionDTO.builder()
                     .name(displayName)
                     .email(normEmail)
-                    .source("PREVIOUS_CONTACT")
+                    .source(assignedCategory)
                     .isPreviousContact(true)
                     .count(1)
                     .build());

@@ -81,8 +81,8 @@ class RecipientSuggestionServiceTest {
     }
 
     @Test
-    @DisplayName("Should fallback to registered BNXmail users when no previous contacts match")
-    void testFallbackToRegisteredBnxmailUsers() {
+    @DisplayName("Should NOT search or return registered database users for partial names")
+    void testDoNotSearchDatabaseUsersForPartialNames() {
         CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
                 CasboxMessageRepository.class.getClassLoader(),
                 new Class<?>[]{CasboxMessageRepository.class},
@@ -118,57 +118,55 @@ class RecipientSuggestionServiceTest {
                 userRepo, mailAccRepo, createDomainRepo(), casboxRepo, null, null
         );
 
+        // When user types partial name 'alex' which is not in communication history,
+        // it must NOT search or return database users
         List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "alex", 10);
-        assertFalse(results.isEmpty());
-        assertEquals("alex@bnxmail.com", results.get(0).getEmail());
-        assertEquals("BNXMAIL_USER", results.get(0).getSource());
-        assertFalse(results.get(0).isPreviousContact());
+        assertTrue(results.isEmpty());
     }
 
     @Test
-    @DisplayName("Should exclude external email addresses from registered user database fallback")
-    void testExcludeExternalDomainsFromUserDatabase() {
+    @DisplayName("Should NOT show new recipient suggestion for incomplete email addresses")
+    void testIncompleteEmailDoesNotSuggestNewRecipient() {
         CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
                 CasboxMessageRepository.class.getClassLoader(),
                 new Class<?>[]{CasboxMessageRepository.class},
                 (proxy, method, args) -> Collections.emptyList()
         );
 
-        User externalUser = new User();
-        externalUser.setId(102L);
-        externalUser.setUsername("john");
-        externalUser.setFirstName("John");
-        externalUser.setLastName("Doe");
-        externalUser.setEmail("johndoe@gmail.com");
-        externalUser.setActive(true);
-
-        UserRepository userRepo = (UserRepository) Proxy.newProxyInstance(
-                UserRepository.class.getClassLoader(),
-                new Class<?>[]{UserRepository.class},
-                (proxy, method, args) -> {
-                    if ("searchUsers".equals(method.getName())) {
-                        return new PageImpl<>(List.of(externalUser));
-                    }
-                    return null;
-                }
+        RecipientSuggestionService service = new RecipientSuggestionService(
+                null, null, createDomainRepo(), casboxRepo, null, null
         );
 
-        MailAccountRepository mailAccRepo = (MailAccountRepository) Proxy.newProxyInstance(
-                MailAccountRepository.class.getClassLoader(),
-                new Class<?>[]{MailAccountRepository.class},
+        // Incomplete addresses must not trigger Add Recipient option
+        List<RecipientSuggestionDTO> r1 = service.searchRecipients(CURRENT_USER, null, "dellibabu", 10);
+        assertTrue(r1.isEmpty());
+
+        List<RecipientSuggestionDTO> r2 = service.searchRecipients(CURRENT_USER, null, "dellibabu@", 10);
+        assertTrue(r2.isEmpty());
+
+        List<RecipientSuggestionDTO> r3 = service.searchRecipients(CURRENT_USER, null, "dellibabu@bnxmail", 10);
+        assertTrue(r3.isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should suggest Add Recipient only when a complete, syntactically valid email is entered")
+    void testCompleteValidEmailSuggestsNewRecipient() {
+        CasboxMessageRepository casboxRepo = (CasboxMessageRepository) Proxy.newProxyInstance(
+                CasboxMessageRepository.class.getClassLoader(),
+                new Class<?>[]{CasboxMessageRepository.class},
                 (proxy, method, args) -> Collections.emptyList()
         );
 
         RecipientSuggestionService service = new RecipientSuggestionService(
-                userRepo, mailAccRepo, createDomainRepo(), casboxRepo, null, null
+                null, null, createDomainRepo(), casboxRepo, null, null
         );
 
-        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "john", 10);
-        // External gmail address must NOT be suggested from user database
-        for (RecipientSuggestionDTO dto : results) {
-            assertNotEquals("johndoe@gmail.com", dto.getEmail());
-            assertFalse(dto.getEmail().endsWith("@gmail.com"));
-        }
+        // Complete, valid email must trigger Add Recipient option
+        List<RecipientSuggestionDTO> results = service.searchRecipients(CURRENT_USER, null, "dellibabu@bnxmail.com", 10);
+        assertFalse(results.isEmpty());
+        assertEquals("dellibabu@bnxmail.com", results.get(0).getEmail());
+        assertEquals("NEW_RECIPIENT", results.get(0).getSource());
+        assertFalse(results.get(0).isPreviousContact());
     }
 
     @Test
