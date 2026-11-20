@@ -93,6 +93,9 @@ public class User {
     @Column(name = "is_primary")
     private Boolean isPrimary = false;
 
+    @Column(name = "welcome_email_sent")
+    private Boolean welcomeEmailSent = false;
+
     @Column(name = "two_factor_enabled")
     private Boolean twoFactorEnabled = false;
 

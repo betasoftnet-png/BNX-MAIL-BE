@@ -30,6 +30,7 @@ public class MailboxService {
     private final PasswordEncoder passwordEncoder;
     private final SessionService sessionService;
     private final JavaMailSender javaMailSender;
+    private final WelcomeEmailService welcomeEmailService;
     
     @Value("${mail.domain:btctech.shop}")
     private String mailDomain;
@@ -111,17 +112,7 @@ public class MailboxService {
 
             // Send welcome email to the newly created mailbox
             try {
-                SimpleMailMessage welcomeMessage = new SimpleMailMessage();
-                welcomeMessage.setFrom("welcome@" + activeDomain);
-                welcomeMessage.setTo(fullEmail);
-                welcomeMessage.setSubject("Welcome to BNX Mail!");
-                welcomeMessage.setText("Dear " + user.getFirstName() + ",\n\n" +
-                        "Welcome to BNX Mail! Your secure email account (" + fullEmail + ") is now active and ready to use.\n\n" +
-                        "BNX Mail is designed with absolute privacy and advanced encryption to keep your digital identity and communications safe.\n\n" +
-                        "Best regards,\n" +
-                        "The BNX Mail Team");
-                javaMailSender.send(welcomeMessage);
-                log.info("Sent welcome email to new mailbox: {}", fullEmail);
+                welcomeEmailService.sendWelcomeEmail(user, mailAccount, plainPassword);
             } catch (Exception e) {
                 log.error("Failed to send welcome email to new mailbox {}: {}", fullEmail, e.getMessage());
             }

@@ -269,6 +269,12 @@ public class AuthController {
         com.btctech.mailapp.service.UserService.LoginResult result = userService.authenticate(request.getEmail(), request.getPassword());
         User user = result.getUser();
 
+        // Mark existing user so they never receive duplicate welcome emails
+        if (user.getWelcomeEmailSent() == null || !user.getWelcomeEmailSent()) {
+            user.setWelcomeEmailSent(true);
+            userRepository.save(user);
+        }
+
         // 1.5 Check if user is suspended
         if (Boolean.FALSE.equals(user.getActive())) {
             log.warn("Login blocked: User {} is suspended", request.getEmail());
