@@ -162,7 +162,46 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 // Ignore if syntax differences
             }
 
-            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, system_label_settings, and user_recovery_codes are verified and ready.");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS important_emails (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_email VARCHAR(150) NOT NULL,
+                    uid VARCHAR(100) NOT NULL,
+                    folder_name VARCHAR(100) NOT NULL,
+                    is_important BOOLEAN NOT NULL DEFAULT TRUE,
+                    is_manual BOOLEAN NOT NULL DEFAULT FALSE,
+                    score DOUBLE DEFAULT 0.0,
+                    reasons TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_user_uid_folder (user_email, uid, folder_name),
+                    INDEX idx_imp_user (user_email),
+                    INDEX idx_imp_user_imp (user_email, is_important)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS user_sender_activity (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_email VARCHAR(150) NOT NULL,
+                    sender_email VARCHAR(150) NOT NULL,
+                    open_count INT NOT NULL DEFAULT 0,
+                    reply_count INT NOT NULL DEFAULT 0,
+                    sent_count INT NOT NULL DEFAULT 0,
+                    thread_count INT NOT NULL DEFAULT 0,
+                    last_opened_at TIMESTAMP NULL,
+                    last_replied_at TIMESTAMP NULL,
+                    last_interaction_at TIMESTAMP NULL,
+                    reputation_score DOUBLE DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_user_sender (user_email, sender_email),
+                    INDEX idx_act_user (user_email),
+                    INDEX idx_act_user_sender (user_email, sender_email)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, system_label_settings, user_recovery_codes, important_emails, and user_sender_activity are verified and ready.");
         } catch (Exception e) {
             log.error("Could not automatically create/verify tables: {}", e.getMessage());
         }

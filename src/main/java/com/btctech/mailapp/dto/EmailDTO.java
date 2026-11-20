@@ -33,6 +33,11 @@ public class EmailDTO {
     
     @JsonProperty("isStarred")
     private boolean isStarred;
+
+    @JsonProperty("isImportant")
+    private boolean isImportant;
+
+    private Double importanceScore;
     private String category;
     private String folderName;
     private boolean hasAttachments;

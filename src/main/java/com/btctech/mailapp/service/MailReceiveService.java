@@ -1,8 +1,10 @@
 package com.btctech.mailapp.service;
 
 import com.btctech.mailapp.entity.StarredEmail;
+import com.btctech.mailapp.entity.ImportantEmail;
 import com.btctech.mailapp.entity.SnoozedEmail;
 import com.btctech.mailapp.repository.StarredEmailRepository;
+import com.btctech.mailapp.repository.ImportantEmailRepository;
 import com.btctech.mailapp.repository.SnoozedEmailRepository;
 import com.btctech.mailapp.repository.MailLabelMappingRepository;
 import com.btctech.mailapp.entity.MailLabelMapping;
@@ -64,6 +66,8 @@ public class MailReceiveService {
     private boolean imapSslEnable;
 
     private final StarredEmailRepository starredEmailRepository;
+    private final ImportantEmailRepository importantEmailRepository;
+    private final SmartImportanceService smartImportanceService;
     private final SnoozedEmailRepository snoozedEmailRepository;
     private final MailLabelMappingRepository labelMappingRepository;
     private final BlockedContactRepository blockedContactRepository;
@@ -749,6 +753,132 @@ public class MailReceiveService {
         }
     }
 
+    public FolderResult getImportant(String email, String password, int page, int limit) {
+        log.info("Fetching important emails for: {}", email);
+
+        List<ImportantEmail> importantMappings = importantEmailRepository.findByUserEmailAndIsImportantTrue(email);
+        if (importantMappings.isEmpty()) return new FolderResult(new ArrayList<>(), 0);
+
+        // Deduplicate mappings by UID (keep newest)
+        java.util.Map<String, ImportantEmail> uniqueMappingsByUid = new java.util.LinkedHashMap<>();
+        importantMappings.sort((a, b) -> {
+            LocalDateTime timeA = a.getUpdatedAt() != null ? a.getUpdatedAt() : a.getCreatedAt();
+            LocalDateTime timeB = b.getUpdatedAt() != null ? b.getUpdatedAt() : b.getCreatedAt();
+            if (timeA != null && timeB != null) {
+                int cmp = timeB.compareTo(timeA);
+                if (cmp != 0) return cmp;
+            } else if (timeA != null) {
+                return -1;
+            } else if (timeB != null) {
+                return 1;
+            }
+            if (a.getId() != null && b.getId() != null) {
+                return b.getId().compareTo(a.getId());
+            }
+            return 0;
+        });
+
+        for (ImportantEmail m : importantMappings) {
+            uniqueMappingsByUid.putIfAbsent(m.getUid(), m);
+        }
+
+        List<ImportantEmail> deduplicatedList = new ArrayList<>(uniqueMappingsByUid.values());
+        int totalCount = deduplicatedList.size();
+        int startIndex = (page - 1) * limit;
+        if (startIndex >= totalCount) return new FolderResult(new ArrayList<>(), totalCount);
+        List<ImportantEmail> pageMappings = deduplicatedList.subList(startIndex, Math.min(startIndex + limit, totalCount));
+
+        Store store = null;
+        try {
+            store = connect(email, password);
+            List<EmailDTO> importantEmails = new ArrayList<>();
+            Set<String> seenUids = new HashSet<>();
+
+            for (ImportantEmail mapping : pageMappings) {
+                try {
+                    String folderToOpen = mapping.getFolderName();
+                    if ("Sent".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveSentFolderName(store);
+                    else if ("Trash".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveTrashFolderName(store);
+                    else if ("Spam".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveSpamFolderName(store);
+                    else if ("Archive".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveArchiveFolderName(store);
+                    else if ("Draft".equalsIgnoreCase(folderToOpen) || "Drafts".equalsIgnoreCase(folderToOpen)) folderToOpen = resolveDraftsFolderName(store);
+
+                    String[] candidates = { folderToOpen, "INBOX", resolveSentFolderName(store), resolveDraftsFolderName(store), resolveArchiveFolderName(store) };
+                    for (String candidate : candidates) {
+                        if (candidate == null || candidate.toUpperCase().contains("IMPORTANT") || candidate.toUpperCase().contains("ALL") || candidate.toUpperCase().contains("LABEL")) continue;
+                        Folder f = null;
+                        try {
+                            f = store.getFolder(candidate);
+                            if (f.exists()) {
+                                if (!f.isOpen()) f.open(Folder.READ_ONLY);
+                                if (f instanceof UIDFolder) {
+                                    UIDFolder uidFolder = (UIDFolder) f;
+                                    Message msg = uidFolder.getMessageByUID(Long.parseLong(mapping.getUid()));
+                                    if (msg != null) {
+                                        EmailDTO dto = convertToDTO(msg, uidFolder, email);
+                                        dto.setImportant(true);
+                                        if (mapping.getScore() != null) {
+                                            dto.setImportanceScore(mapping.getScore());
+                                        }
+                                        if (seenUids.add(dto.getUid())) {
+                                            importantEmails.add(dto);
+                                        }
+                                        try { if (f != null && f.isOpen()) f.close(false); } catch (Exception ex) {}
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            log.debug("Failed candidate {} for important email UID {}", candidate, mapping.getUid());
+                        } finally {
+                            try { if (f != null && f.isOpen()) f.close(false); } catch (Exception ex) {}
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to fetch important email for UID {}: {}", mapping.getUid(), e.getMessage());
+                }
+            }
+
+            // Sort important emails descending by actual sent/received timestamp (newest first)
+            importantEmails.sort((a, b) -> {
+                java.util.Date dateA = a.getReceivedDate() != null ? a.getReceivedDate() : a.getSentDate();
+                java.util.Date dateB = b.getReceivedDate() != null ? b.getReceivedDate() : b.getSentDate();
+                if (dateA == null && dateB == null) return 0;
+                if (dateA == null) return 1;
+                if (dateB == null) return -1;
+                int cmp = dateB.compareTo(dateA);
+                if (cmp != 0) return cmp;
+                if (a.getUid() != null && b.getUid() != null) {
+                    try {
+                        long uidA = Long.parseLong(a.getUid());
+                        long uidB = Long.parseLong(b.getUid());
+                        return Long.compare(uidB, uidA);
+                    } catch (NumberFormatException ignored) {
+                        return b.getUid().compareTo(a.getUid());
+                    }
+                }
+                return 0;
+            });
+
+            return new FolderResult(importantEmails, totalCount);
+        } catch (MessagingException e) {
+            log.error("Failed to connect for important emails: {}", e.getMessage());
+            throw new MailException("Failed to fetch important emails.");
+        } finally {
+            cleanup(store, null);
+        }
+    }
+
+    @Transactional
+    public boolean toggleImportant(String email, String password, String folderName, String uid, Boolean requestedStatus) {
+        log.info("Toggling important for email UID {} in folder {} for {}. Requested status: {}", uid, folderName, email, requestedStatus);
+        if (requestedStatus != null) {
+            return smartImportanceService.setManualImportance(email, uid, folderName, requestedStatus);
+        } else {
+            return smartImportanceService.toggleManualImportance(email, uid, folderName);
+        }
+    }
+
     public void moveToTrash(String email, String password, String sourceFolderName, String uid) {
         log.info("Moving email UID {} from {} to Trash for {}", uid, sourceFolderName, email);
         moveMessage(email, password, sourceFolderName, uid, "Trash");
@@ -1338,6 +1468,17 @@ public class MailReceiveService {
 
             message.setFlag(jakarta.mail.Flags.Flag.SEEN, seen);
             log.info("Marked message {} as {} in folder {} for {}", uid, seen ? "read" : "unread", folder.getName(), email);
+
+            if (seen) {
+                try {
+                    Address[] fromAddrs = message.getFrom();
+                    if (fromAddrs != null && fromAddrs.length > 0) {
+                        smartImportanceService.recordEmailOpened(email, fromAddrs[0].toString());
+                    }
+                } catch (Exception recEx) {
+                    log.debug("Could not record email open activity: {}", recEx.getMessage());
+                }
+            }
         } catch (Exception e) {
             log.error("Failed to set seen flag to {}: {}", seen, e.getMessage(), e);
             throw new MailException("Failed to update read status: " + e.getMessage());
@@ -1825,6 +1966,12 @@ public class MailReceiveService {
             msgId = generateEmailFingerprint(dto.getFrom(), userEmail, dto.getSentDate(), dto.getReceivedDate(), dto.getSubject(), dto.getBody());
         }
         dto.setMessageId(msgId);
+
+        try {
+            smartImportanceService.enrichEmail(userEmail, dto, normFolder);
+        } catch (Exception e) {
+            log.debug("Failed to enrich importance for UID {}: {}", dto.getUid(), e.getMessage());
+        }
 
         return dto;
     }

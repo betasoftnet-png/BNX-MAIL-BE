@@ -31,6 +31,7 @@ public class MailSendService {
     
     private final MailReceiveService mailReceiveService;
     private final StarredEmailRepository starredEmailRepository;
+    private final SmartImportanceService smartImportanceService;
 
     @Value("${mail.smtp.host:localhost}")
     private String smtpHost;
@@ -168,6 +169,15 @@ public class MailSendService {
             transport.sendMessage(message, message.getAllRecipients());
             transport.close();
             
+            try {
+                smartImportanceService.recordEmailSentOrReplied(fromEmail, request.getTo(), request.getSubject());
+                if (request.getCc() != null && !request.getCc().trim().isEmpty()) {
+                    smartImportanceService.recordEmailSentOrReplied(fromEmail, request.getCc(), request.getSubject());
+                }
+            } catch (Exception actEx) {
+                log.debug("Could not record sent/reply activity: {}", actEx.getMessage());
+            }
+
             log.info("✓ Email sent successfully from {} to {}", fromEmail, request.getTo());
             
             String sentUid = null;

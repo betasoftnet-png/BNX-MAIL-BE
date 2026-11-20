@@ -462,6 +462,89 @@ public class MailReceiveController {
     }
 
     /**
+     * Get important emails
+     */
+    @GetMapping("/important")
+    public ResponseEntity<ApiResponse<InboxResponse>> getImportant(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestHeader("Authorization") String authHeader,
+            Authentication authentication) {
+
+        try {
+            String email = authentication.getName();
+            log.info("Get important emails request from: {}", email);
+
+            String token = authHeader.substring(7);
+            String password = sessionService.getPasswordFromSession(token);
+
+            if (password == null) {
+                return ResponseEntity.badRequest()
+                        .body(ApiResponse.error("Session expired. Please login again."));
+            }
+
+            com.btctech.mailapp.dto.FolderResult result = mailReceiveService.getImportant(email, password, page, limit);
+            List<EmailDTO> emails = result.getEmails() != null ? result.getEmails() : new java.util.ArrayList<>();
+            int totalCount = result.getTotalCount();
+            int unreadCount = (int) emails.stream().filter(e -> !e.isRead()).count();
+
+            InboxResponse response = InboxResponse.builder()
+                    .email(email)
+                    .totalCount(totalCount)
+                    .unreadCount(unreadCount)
+                    .emails(emails)
+                    .build();
+
+            log.info("✓ Fetched {} important emails for {}", emails.size(), email);
+
+            return ResponseEntity.ok(
+                    ApiResponse.success(response, "Important emails fetched successfully"));
+
+        } catch (Throwable e) {
+            String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
+            log.error("CRITICAL error fetching important emails for {}: {}", userEmail, e.getMessage(), e);
+            return ResponseEntity.status(500)
+                    .body(ApiResponse.error("Failed to fetch important emails: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Toggle or set important status
+     */
+    @PostMapping("/important/{uid}")
+    public ResponseEntity<ApiResponse<Boolean>> toggleImportant(
+            @PathVariable String uid,
+            @RequestParam(defaultValue = "INBOX") String folder,
+            @RequestParam(required = false) Boolean isImportant,
+            @RequestHeader("Authorization") String authHeader,
+            Authentication authentication) {
+
+        try {
+            String email = authentication.getName();
+            log.info("Toggle/set important request for {} in folder {} from {}. Requested: {}", uid, folder, email, isImportant);
+
+            String token = authHeader.substring(7);
+            String password = sessionService.getPasswordFromSession(token);
+
+            if (password == null) {
+                return ResponseEntity.status(401)
+                        .body(ApiResponse.error("Session expired. Please login again."));
+            }
+
+            boolean updatedStatus = mailReceiveService.toggleImportant(email, password, folder, uid, isImportant);
+
+            return ResponseEntity.ok(
+                    ApiResponse.success(updatedStatus, "Important status updated successfully"));
+
+        } catch (Throwable e) {
+            String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
+            log.error("CRITICAL error updating important status for UID {} in folder {} for {}: {}", uid, folder, userEmail, e.getMessage(), e);
+            return ResponseEntity.status(500)
+                    .body(ApiResponse.error("Failed to update important status: " + e.getMessage()));
+        }
+    }
+
+    /**
      * Get trash emails
      */
     @GetMapping("/trash")
