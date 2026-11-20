@@ -28,15 +28,18 @@ public class MailLabelService {
 
     @Transactional
     public MailLabel createLabel(String userEmail, String name, String colorHex, Long parentId) {
-        if (labelRepository.existsByUserEmailAndName(userEmail, name)) {
-            throw new MailException("Label with name '" + name + "' already exists");
-        }
-
-        if (parentId != null) {
+        if (parentId == null) {
+            if (labelRepository.existsByUserEmailAndNameAndParentIdIsNull(userEmail, name)) {
+                throw new MailException("Label with name '" + name + "' already exists");
+            }
+        } else {
             MailLabel parent = labelRepository.findById(parentId)
                     .orElseThrow(() -> new MailException("Parent label not found"));
             if (!parent.getUserEmail().equals(userEmail)) {
                 throw new MailException("Unauthorized parent label");
+            }
+            if (labelRepository.existsByUserEmailAndNameAndParentId(userEmail, name, parentId)) {
+                throw new MailException("Label with name '" + name + "' already exists under this parent");
             }
         }
 
@@ -59,13 +62,12 @@ public class MailLabelService {
             throw new MailException("You do not have permission to edit this label");
         }
 
-        if (!label.getName().equals(name) && labelRepository.existsByUserEmailAndName(userEmail, name)) {
-            throw new MailException("Label with name '" + name + "' already exists");
-        }
-
         if (parentId != null) {
             if (parentId.equals(labelId)) {
                 throw new MailException("A label cannot be its own parent");
+            }
+            if (isDescendant(parentId, labelId)) {
+                throw new MailException("Circular parent-child relationship is not allowed");
             }
             MailLabel parent = labelRepository.findById(parentId)
                     .orElseThrow(() -> new MailException("Parent label not found"));
@@ -74,11 +76,41 @@ public class MailLabelService {
             }
         }
 
+        boolean parentChanged = (parentId == null && label.getParentId() != null) ||
+                (parentId != null && !parentId.equals(label.getParentId()));
+        boolean nameChanged = !label.getName().equals(name);
+
+        if (nameChanged || parentChanged) {
+            boolean duplicate = (parentId == null)
+                    ? labelRepository.existsByUserEmailAndNameAndParentIdIsNull(userEmail, name)
+                    : labelRepository.existsByUserEmailAndNameAndParentId(userEmail, name, parentId);
+            if (duplicate) {
+                throw new MailException("Label with name '" + name + "' already exists");
+            }
+        }
+
         label.setName(name);
         label.setColorHex(colorHex);
         label.setParentId(parentId);
 
         return labelRepository.save(label);
+    }
+
+    private boolean isDescendant(Long targetParentId, Long currentLabelId) {
+        Long current = targetParentId;
+        int depth = 0;
+        while (current != null && depth < 100) {
+            if (current.equals(currentLabelId)) {
+                return true;
+            }
+            MailLabel lbl = labelRepository.findById(current).orElse(null);
+            if (lbl == null) {
+                break;
+            }
+            current = lbl.getParentId();
+            depth++;
+        }
+        return false;
     }
 
     @Transactional

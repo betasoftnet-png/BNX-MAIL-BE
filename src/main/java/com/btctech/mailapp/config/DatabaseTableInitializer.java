@@ -162,6 +162,12 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 // Ignore if syntax differences
             }
 
+            try {
+                jdbcTemplate.execute("ALTER TABLE user_labels ADD COLUMN IF NOT EXISTS parent_id BIGINT NULL");
+            } catch (Exception ignoreEx) {
+                // Ignore if column already exists or syntax differences
+            }
+
             jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS important_emails (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
