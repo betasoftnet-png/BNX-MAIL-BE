@@ -40,6 +40,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/verification/status/**", "/api/verification/webhook").permitAll()
                         .requestMatchers("/api/oauth/token", "/api/oauth/check-session", "/api/oauth/introspect", "/api/oauth/revoke").permitAll() // ✅ OAuth endpoints
                         .requestMatchers("/api/webhooks/incoming-mail").permitAll() // ✅ Webhook
+                        .requestMatchers("/api/mail/read-receipt/*/respond", "/api/mail/read-receipt/*/status").permitAll() // ✅ Read receipt response
                         .requestMatchers("/api/mail/public/send", "/api/mail/public/schedule", "/api/mail/public/schedule/**").permitAll() // ✅ Public email sending/scheduling
                         .requestMatchers("/", "/index.html", "/error").permitAll()
                         .requestMatchers(

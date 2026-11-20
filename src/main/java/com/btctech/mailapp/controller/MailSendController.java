@@ -35,6 +35,7 @@ public class MailSendController {
     private final com.btctech.mailapp.repository.ScheduledEmailRepository scheduledEmailRepository;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final com.btctech.mailapp.service.PendingEmailService pendingEmailService;
+    private final com.btctech.mailapp.service.ReadReceiptService readReceiptService;
 
     /**
      * Send email - NO PASSWORD NEEDED in request!
@@ -78,6 +79,23 @@ public class MailSendController {
             User user = userService.getUserByEmailOrUsername(fromEmail);
             Long userId = user != null ? user.getId() : null;
 
+            // Read Receipt Access Control (Strictly Business Accounts Only)
+            if (Boolean.TRUE.equals(request.getRequestReadReceipt())) {
+                if (!readReceiptService.isBusinessAccount(fromEmail)) {
+                    log.warn("Unauthorized read receipt request by non-business account: {}", fromEmail);
+                    return ResponseEntity.status(403)
+                            .body(ApiResponse.error("Read receipt feature is only available to Business Accounts"));
+                }
+                String sendId = request.getSendId();
+                if (sendId == null || sendId.trim().isEmpty()) {
+                    sendId = java.util.UUID.randomUUID().toString();
+                    request.setSendId(sendId);
+                }
+                com.btctech.mailapp.entity.ReadReceipt receipt = readReceiptService.createReceiptRequest(
+                        fromEmail, userId, request.getTo(), request.getSubject(), sendId);
+                request.setReadReceiptId(receipt.getReceiptId());
+            }
+
             int delaySeconds = request.getUndoDelay() != null ? request.getUndoDelay() : 5;
             boolean isStarred = Boolean.TRUE.equals(request.getIsStarred()) || Boolean.TRUE.equals(request.getStarred());
 
@@ -104,6 +122,10 @@ public class MailSendController {
                 data.put("sentAt", System.currentTimeMillis());
                 data.put("starred", isStarred);
                 data.put("isStarred", isStarred);
+                if (request.getReadReceiptId() != null) {
+                    data.put("readReceiptId", request.getReadReceiptId());
+                    data.put("readReceiptRequested", true);
+                }
 
                 log.info("✓ Email queued with {}s undo window (sendId={}) from {} to {}", delaySeconds, pending.getSendId(), fromEmail, request.getTo());
                 return ResponseEntity.ok(ApiResponse.success(data, "Message sent"));
@@ -124,6 +146,10 @@ public class MailSendController {
             }
             data.put("starred", isStarred);
             data.put("isStarred", isStarred);
+            if (request.getReadReceiptId() != null) {
+                data.put("readReceiptId", request.getReadReceiptId());
+                data.put("readReceiptRequested", true);
+            }
 
             log.info("✓ Email sent immediately from {} to {} (sentUid={}, isStarred={})", fromEmail, request.getTo(), sentUid, isStarred);
 

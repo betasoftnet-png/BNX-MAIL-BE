@@ -44,4 +44,11 @@ public class EmailDTO {
     private List<String> attachments;
     private int size;
     private java.util.List<com.btctech.mailapp.entity.MailLabel> labels;
+
+    private Boolean readReceiptRequested;
+    private String readReceiptId;
+    private String readReceiptStatus;
+    private String readReceiptRecipient;
+    private String readReceiptSender;
+    private Date readReceiptRespondedAt;
 }

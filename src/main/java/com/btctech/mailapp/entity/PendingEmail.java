@@ -73,6 +73,13 @@ public class PendingEmail {
     @Builder.Default
     private Boolean isStarred = false;
 
+    @Column(name = "request_read_receipt")
+    @Builder.Default
+    private Boolean requestReadReceipt = false;
+
+    @Column(name = "read_receipt_id", length = 64)
+    private String readReceiptId;
+
     /**
      * States: PENDING_UNDO, SENDING, SENT, CANCELLED, FAILED
      */

@@ -113,6 +113,8 @@ public class PendingEmailService {
                 .draftUid(draftUid)
                 .draftId(request.getDraftId() != null ? request.getDraftId() : request.getId())
                 .isStarred(isStarred)
+                .requestReadReceipt(Boolean.TRUE.equals(request.getRequestReadReceipt()))
+                .readReceiptId(request.getReadReceiptId())
                 .status("PENDING_UNDO")
                 .undoDeadline(undoDeadline)
                 .createdAt(now)
@@ -255,6 +257,8 @@ public class PendingEmailService {
                 request.setDraftId(pendingEmail.getDraftId());
                 request.setIsStarred(pendingEmail.getIsStarred());
                 request.setStarred(pendingEmail.getIsStarred());
+                request.setRequestReadReceipt(pendingEmail.getRequestReadReceipt());
+                request.setReadReceiptId(pendingEmail.getReadReceiptId());
 
                 if (pendingEmail.getAttachmentsJson() != null && !pendingEmail.getAttachmentsJson().trim().isEmpty()) {
                     try {

@@ -207,7 +207,41 @@ public class DatabaseTableInitializer implements CommandLineRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """);
 
-            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, system_label_settings, user_recovery_codes, important_emails, and user_sender_activity are verified and ready.");
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS read_receipts (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    receipt_id VARCHAR(64) NOT NULL UNIQUE,
+                    sender_email VARCHAR(150) NOT NULL,
+                    sender_user_id BIGINT,
+                    recipient_email VARCHAR(255) NOT NULL,
+                    subject VARCHAR(500),
+                    message_id VARCHAR(255),
+                    send_id VARCHAR(64),
+                    sent_uid VARCHAR(100),
+                    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+                    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    responded_at TIMESTAMP NULL,
+                    recipient_user_agent VARCHAR(255),
+                    declined_reason VARCHAR(255),
+                    version BIGINT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_rr_receipt_id (receipt_id),
+                    INDEX idx_rr_sender (sender_email),
+                    INDEX idx_rr_recipient (recipient_email),
+                    INDEX idx_rr_send_id (send_id),
+                    INDEX idx_rr_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """);
+
+            try {
+                jdbcTemplate.execute("ALTER TABLE pending_emails ADD COLUMN IF NOT EXISTS request_read_receipt BOOLEAN DEFAULT FALSE");
+                jdbcTemplate.execute("ALTER TABLE pending_emails ADD COLUMN IF NOT EXISTS read_receipt_id VARCHAR(64) NULL");
+            } catch (Exception ignoreEx) {
+                // Ignore if columns already exist
+            }
+
+            log.info("Database tables contact_aliases, connections, processed_emails, chat_admins, system_label_settings, user_recovery_codes, important_emails, user_sender_activity, and read_receipts are verified and ready.");
         } catch (Exception e) {
             log.error("Could not automatically create/verify tables: {}", e.getMessage());
         }

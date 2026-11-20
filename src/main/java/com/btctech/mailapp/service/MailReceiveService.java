@@ -74,6 +74,7 @@ public class MailReceiveService {
     private final ProcessedEmailRepository processedEmailRepository;
     private final SpamClassifierService spamClassifierService;
     private final SenderReputationRepository senderReputationRepository;
+    private final ReadReceiptService readReceiptService;
 
 
     /**
@@ -1971,6 +1972,32 @@ public class MailReceiveService {
             smartImportanceService.enrichEmail(userEmail, dto, normFolder);
         } catch (Exception e) {
             log.debug("Failed to enrich importance for UID {}: {}", dto.getUid(), e.getMessage());
+        }
+
+        // Read Receipt Inspection & Enrichment
+        try {
+            String[] receiptIdHeaders = message.getHeader("X-BNX-Read-Receipt-Id");
+            if (receiptIdHeaders != null && receiptIdHeaders.length > 0 && receiptIdHeaders[0] != null && !receiptIdHeaders[0].trim().isEmpty()) {
+                dto.setReadReceiptId(receiptIdHeaders[0].trim());
+                dto.setReadReceiptRequested(true);
+            }
+            String[] dispHeaders = message.getHeader("Disposition-Notification-To");
+            if (dispHeaders != null && dispHeaders.length > 0 && dispHeaders[0] != null && !dispHeaders[0].trim().isEmpty()) {
+                dto.setReadReceiptRequested(true);
+                if (dto.getReadReceiptSender() == null) {
+                    dto.setReadReceiptSender(extractEmailAddress(dispHeaders[0]));
+                }
+            }
+
+            if (readReceiptService != null) {
+                if ("SENT".equalsIgnoreCase(dto.getCategory()) || "Sent".equalsIgnoreCase(normFolder)) {
+                    readReceiptService.enrichSentEmailDtoWithReceipt(dto, userEmail);
+                } else {
+                    readReceiptService.enrichEmailDtoWithReceipt(dto, userEmail);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to enrich read receipt for UID {}: {}", dto.getUid(), e.getMessage());
         }
 
         return dto;

@@ -74,4 +74,10 @@ public class SendMailRequest {
     private String sendId;
 
     private Integer undoDelay;
+
+    @JsonProperty("requestReadReceipt")
+    private Boolean requestReadReceipt = false;
+
+    @JsonProperty("readReceiptId")
+    private String readReceiptId;
 }

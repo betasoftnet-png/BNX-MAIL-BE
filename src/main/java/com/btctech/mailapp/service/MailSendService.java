@@ -32,6 +32,7 @@ public class MailSendService {
     private final MailReceiveService mailReceiveService;
     private final StarredEmailRepository starredEmailRepository;
     private final SmartImportanceService smartImportanceService;
+    private final ReadReceiptService readReceiptService;
 
     @Value("${mail.smtp.host:localhost}")
     private String smtpHost;
@@ -101,6 +102,16 @@ public class MailSendService {
             }
             
             message.setSubject(request.getSubject());
+
+            // Read Receipt Request Headers (RFC 2298 / RFC 3798 & custom BNX tracking)
+            if (Boolean.TRUE.equals(request.getRequestReadReceipt())) {
+                message.setHeader("Disposition-Notification-To", fromEmail);
+                message.setHeader("Return-Receipt-To", fromEmail);
+                if (request.getReadReceiptId() != null && !request.getReadReceiptId().trim().isEmpty()) {
+                    message.setHeader("X-BNX-Read-Receipt-Id", request.getReadReceiptId().trim());
+                }
+                log.info("Appended read receipt headers to email (receiptId={})", request.getReadReceiptId());
+            }
             
             if (request.getAttachments() != null && !request.getAttachments().isEmpty()) {
                 Multipart multipart = new MimeMultipart();
@@ -186,6 +197,15 @@ public class MailSendService {
             } else {
                 log.info("Skipping Sent folder IMAP archival (no password provided / public send)");
             }
+
+            if (request.getReadReceiptId() != null && readReceiptService != null) {
+                try {
+                    readReceiptService.associateSentDetails(request.getReadReceiptId(), messageId, sentUid);
+                } catch (Exception ex) {
+                    log.warn("Could not associate read receipt sent details: {}", ex.getMessage());
+                }
+            }
+
             return sentUid;
             
         } catch (MessagingException e) {
