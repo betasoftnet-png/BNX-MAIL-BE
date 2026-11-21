@@ -294,19 +294,23 @@ public class PendingEmailService {
      */
     @Scheduled(fixedDelay = 2000)
     public void pollPendingDeliveries() {
-        LocalDateTime now = LocalDateTime.now();
-        List<PendingEmail> dueEmails = pendingEmailRepository.findByStatusAndUndoDeadlineBefore("PENDING_UNDO", now);
-        if (dueEmails.isEmpty()) {
-            return;
-        }
-
-        log.debug("Found {} pending emails due for delivery", dueEmails.size());
-        for (PendingEmail email : dueEmails) {
-            try {
-                deliverPendingEmail(email.getSendId());
-            } catch (Exception e) {
-                log.error("Recovery delivery failed for sendId {}: {}", email.getSendId(), e.getMessage());
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            List<PendingEmail> dueEmails = pendingEmailRepository.findByStatusAndUndoDeadlineBefore("PENDING_UNDO", now);
+            if (dueEmails.isEmpty()) {
+                return;
             }
+
+            log.debug("Found {} pending emails due for delivery", dueEmails.size());
+            for (PendingEmail email : dueEmails) {
+                try {
+                    deliverPendingEmail(email.getSendId());
+                } catch (Exception e) {
+                    log.error("Recovery delivery failed for sendId {}: {}", email.getSendId(), e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Pending email poll check failed: {}", e.getMessage());
         }
     }
 
@@ -316,7 +320,11 @@ public class PendingEmailService {
     @EventListener(ApplicationReadyEvent.class)
     public void onStartup() {
         log.info("Checking for any pending emails after startup...");
-        pollPendingDeliveries();
+        try {
+            pollPendingDeliveries();
+        } catch (Exception e) {
+            log.error("Failed to poll pending emails on startup: {}", e.getMessage());
+        }
     }
 
     /**

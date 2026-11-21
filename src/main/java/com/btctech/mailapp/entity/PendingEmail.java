@@ -87,7 +87,7 @@ public class PendingEmail {
     @Builder.Default
     private String status = "PENDING_UNDO";
 
-    @Column(name = "undo_deadline", nullable = false)
+    @Column(name = "undo_deadline")
     private LocalDateTime undoDeadline;
 
     @Column(name = "sent_at")
