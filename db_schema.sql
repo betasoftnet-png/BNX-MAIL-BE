@@ -409,6 +409,42 @@ CREATE TABLE IF NOT EXISTS system_label_settings (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ==========================================
+-- TABLE: PENDING_EMAILS (Undo Send and scheduled delivery queue)
+-- ==========================================
+CREATE TABLE IF NOT EXISTS pending_emails (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    send_id VARCHAR(64) NOT NULL UNIQUE,
+    user_email VARCHAR(150) NOT NULL,
+    user_id BIGINT NULL,
+    mail_account_id BIGINT NULL,
+    encrypted_password TEXT NULL,
+    to_recipient TEXT NOT NULL,
+    cc_recipient TEXT NULL,
+    bcc_recipient TEXT NULL,
+    subject VARCHAR(500) NOT NULL,
+    body LONGTEXT NOT NULL,
+    from_name VARCHAR(255) NULL,
+    is_html BOOLEAN DEFAULT TRUE,
+    attachments_json LONGTEXT NULL,
+    draft_uid VARCHAR(100) NULL,
+    draft_id BIGINT NULL,
+    is_starred BOOLEAN DEFAULT FALSE,
+    request_read_receipt BOOLEAN DEFAULT FALSE,
+    read_receipt_id VARCHAR(64) NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING_UNDO',
+    undo_deadline DATETIME(6) NULL,
+    sent_at DATETIME(6) NULL,
+    sent_uid VARCHAR(100) NULL,
+    error_message TEXT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NULL ON UPDATE CURRENT_TIMESTAMP(6),
+    version BIGINT DEFAULT 0,
+    INDEX idx_pending_send_id (send_id),
+    INDEX idx_pending_user_status (user_email, status),
+    INDEX idx_pending_status_deadline (status, undo_deadline)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ==========================================
 -- SAMPLE DATA
 -- ==========================================
 INSERT IGNORE INTO users (username, email, password, first_name, last_name, role) 

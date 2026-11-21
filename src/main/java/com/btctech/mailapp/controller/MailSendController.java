@@ -11,7 +11,6 @@ import com.btctech.mailapp.service.MailboxService;
 import com.btctech.mailapp.service.SessionService;
 import com.btctech.mailapp.service.UserService;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -25,7 +24,6 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/mail")
-@RequiredArgsConstructor
 public class MailSendController {
 
     private final MailSendService mailSendService;
@@ -36,6 +34,25 @@ public class MailSendController {
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final com.btctech.mailapp.service.PendingEmailService pendingEmailService;
     private final com.btctech.mailapp.service.ReadReceiptService readReceiptService;
+
+    public MailSendController(
+            MailSendService mailSendService,
+            SessionService sessionService,
+            MailboxService mailboxService,
+            UserService userService,
+            com.btctech.mailapp.repository.ScheduledEmailRepository scheduledEmailRepository,
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+            com.btctech.mailapp.service.PendingEmailService pendingEmailService,
+            com.btctech.mailapp.service.ReadReceiptService readReceiptService) {
+        this.mailSendService = mailSendService;
+        this.sessionService = sessionService;
+        this.mailboxService = mailboxService;
+        this.userService = userService;
+        this.scheduledEmailRepository = scheduledEmailRepository;
+        this.objectMapper = objectMapper;
+        this.pendingEmailService = pendingEmailService;
+        this.readReceiptService = readReceiptService;
+    }
 
     /**
      * Send email - NO PASSWORD NEEDED in request!
@@ -216,6 +233,9 @@ public class MailSendController {
             @PathVariable String sendId,
             Authentication authentication) {
         try {
+            if (authentication == null || authentication.getName() == null) {
+                return ResponseEntity.status(401).body(ApiResponse.error("Unauthorized"));
+            }
             String userEmail = authentication.getName();
             com.btctech.mailapp.entity.PendingEmail email = pendingEmailService.getPendingEmail(sendId, userEmail)
                     .orElse(null);
@@ -223,14 +243,16 @@ public class MailSendController {
                 return ResponseEntity.status(404).body(ApiResponse.error("Pending email not found"));
             }
 
-            long expiresAt = java.time.ZonedDateTime.of(email.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
             long now = System.currentTimeMillis();
+            long expiresAt = email.getUndoDeadline() != null
+                    ? java.time.ZonedDateTime.of(email.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    : now;
             int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
 
             Map<String, Object> data = new HashMap<>();
             data.put("sendId", email.getSendId());
             data.put("status", email.getStatus());
-            data.put("undoDeadline", email.getUndoDeadline().toString());
+            data.put("undoDeadline", email.getUndoDeadline() != null ? email.getUndoDeadline().toString() : null);
             data.put("from", email.getUserEmail());
             data.put("fromName", email.getFromName());
             data.put("to", email.getToRecipient());
@@ -249,6 +271,7 @@ public class MailSendController {
 
             return ResponseEntity.ok(ApiResponse.success(data, "Pending email details"));
         } catch (Exception e) {
+            log.warn("Failed to get pending email: {}", e.getMessage());
             return ResponseEntity.badRequest().body(ApiResponse.error("Failed to get pending email: " + e.getMessage()));
         }
     }
@@ -260,40 +283,50 @@ public class MailSendController {
     @GetMapping("/pending")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getActivePendingEmails(Authentication authentication) {
         try {
+            if (authentication == null || authentication.getName() == null) {
+                return ResponseEntity.ok(ApiResponse.success(new ArrayList<>(), "Active pending emails"));
+            }
             String userEmail = authentication.getName();
             List<com.btctech.mailapp.entity.PendingEmail> list = pendingEmailService.getActivePendingEmails(userEmail);
             List<Map<String, Object>> result = new ArrayList<>();
             long now = System.currentTimeMillis();
 
-            for (com.btctech.mailapp.entity.PendingEmail email : list) {
-                long expiresAt = java.time.ZonedDateTime.of(email.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
-                int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
+            if (list != null) {
+                for (com.btctech.mailapp.entity.PendingEmail email : list) {
+                    if (email == null) continue;
+                    long expiresAt = email.getUndoDeadline() != null
+                            ? java.time.ZonedDateTime.of(email.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                            : now;
+                    int remainingSeconds = Math.max(0, (int) Math.ceil((expiresAt - now) / 1000.0));
 
-                Map<String, Object> data = new HashMap<>();
-                data.put("sendId", email.getSendId());
-                data.put("status", email.getStatus());
-                data.put("undoDeadline", email.getUndoDeadline().toString());
-                data.put("from", email.getUserEmail());
-                data.put("fromName", email.getFromName());
-                data.put("to", email.getToRecipient());
-                data.put("cc", email.getCc());
-                data.put("bcc", email.getBcc());
-                data.put("subject", email.getSubject());
-                data.put("body", email.getBody());
-                data.put("isHtml", email.getIsHtml());
-                data.put("draftUid", email.getDraftUid());
-                data.put("draftId", email.getDraftId());
-                data.put("attachments", pendingEmailService.parseAttachments(email.getAttachmentsJson()));
-                data.put("expiresAt", expiresAt);
-                data.put("remainingSeconds", remainingSeconds);
-                data.put("isStarred", email.getIsStarred());
-                data.put("starred", email.getIsStarred());
-                result.add(data);
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("sendId", email.getSendId());
+                    data.put("status", email.getStatus());
+                    data.put("undoDeadline", email.getUndoDeadline() != null ? email.getUndoDeadline().toString() : null);
+                    data.put("from", email.getUserEmail());
+                    data.put("fromName", email.getFromName());
+                    data.put("to", email.getToRecipient());
+                    data.put("cc", email.getCc());
+                    data.put("bcc", email.getBcc());
+                    data.put("subject", email.getSubject());
+                    data.put("body", email.getBody());
+                    data.put("isHtml", email.getIsHtml());
+                    data.put("draftUid", email.getDraftUid());
+                    data.put("draftId", email.getDraftId());
+                    data.put("attachments", pendingEmailService.parseAttachments(email.getAttachmentsJson()));
+                    data.put("expiresAt", expiresAt);
+                    data.put("remainingSeconds", remainingSeconds);
+                    data.put("isStarred", email.getIsStarred());
+                    data.put("starred", email.getIsStarred());
+                    result.add(data);
+                }
             }
 
             return ResponseEntity.ok(ApiResponse.success(result, "Active pending emails"));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(ApiResponse.error("Failed to retrieve pending emails: " + e.getMessage()));
+            log.error("Failed to retrieve pending emails: {}", e.getMessage(), e);
+            // Return 200 with empty list instead of 400 Bad Request to prevent UI breakage
+            return ResponseEntity.ok(ApiResponse.success(new ArrayList<>(), "Active pending emails"));
         }
     }
 
