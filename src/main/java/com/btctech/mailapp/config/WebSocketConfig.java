@@ -10,10 +10,38 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
+    private static final String[] ALLOWED_ORIGIN_PATTERNS = {
+        "https://www.bnxmail.com",
+        "https://bnxmail.com",
+        "https://api.bnxmail.com",
+        "https://admin.bnxmail.com",
+        "https://www.b2auth.com",
+        "https://b2auth.com",
+        "https://cliks.beta-softnet.com",
+        "https://cliksbusiness.com",
+        "https://account.beta-softnet.com",
+        "https://www.beta-softnet.com",
+        "https://beta-softnet.com",
+        "https://bit-tool.com",
+        "https://www.bit-tool.com",
+        "https://app2.bit-tool.com",
+        "http://app2.bit-tool.com",
+        "https://storage.beta-softnet.com",
+        "https://www.kinsword.com",
+        "https://*.bnxmail.com",
+        "https://*.bit-tool.com",
+        "http://*.bit-tool.com",
+        "https://*.beta-softnet.com",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:[*]",
+        "http://127.0.0.1:[*]"
+    };
+
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws").setAllowedOriginPatterns("*");
-        registry.addEndpoint("/ws").setAllowedOriginPatterns("*").withSockJS();
+        registry.addEndpoint("/ws").setAllowedOriginPatterns(ALLOWED_ORIGIN_PATTERNS);
+        registry.addEndpoint("/ws").setAllowedOriginPatterns(ALLOWED_ORIGIN_PATTERNS).withSockJS();
     }
 
     @Override

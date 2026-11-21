@@ -13,6 +13,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 
 import java.util.Arrays;
 import java.util.List;
@@ -85,61 +86,48 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // ✅ Allow production domains and local dev servers
+        // ✅ Explicit allowed origin patterns for production and local development
         configuration.setAllowedOriginPatterns(List.of(
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "https://www.kinsword.com",
+            "https://www.bnxmail.com",
+            "https://bnxmail.com",
+            "https://api.bnxmail.com",
+            "https://admin.bnxmail.com",
             "https://www.b2auth.com",
             "https://b2auth.com",
             "https://cliks.beta-softnet.com",
             "https://cliksbusiness.com",
-            "https://www.bnxmail.com",
-            "https://bnxmail.com",
             "https://account.beta-softnet.com",
             "https://www.beta-softnet.com",
             "https://beta-softnet.com",
-            "https://admin.bnxmail.com/",
-            "https://admin.bnxmail.com",
-            "https://bit-tool.com/",
             "https://bit-tool.com",
             "https://www.bit-tool.com",
-            "https://www.bit-tool.com/",
             "https://app2.bit-tool.com",
-            "https://app2.bit-tool.com/",
             "http://app2.bit-tool.com",
-            "http://app2.bit-tool.com/",
+            "https://storage.beta-softnet.com",
+            "https://www.kinsword.com",
+            "https://*.bnxmail.com",
             "https://*.bit-tool.com",
             "http://*.bit-tool.com",
-            "https://storage.beta-softnet.com",
-            "https://z7ibjggnrtzynrguut8nerqr.151.185.41.212.sslip.io",
-            "http://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
-            "https://a11atsvnjorf7fwsxsfxvkwf.151.185.41.212.sslip.io",
-            "http://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
-            "https://z8m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
-            "http://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
-            "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io",
-            "http://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io/",
-            "https://z7m99lkvh7u6ncfsumfwcrdl.151.185.41.212.sslip.io/",
-            "http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io",
-            "https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io",
-            "http://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/",
-            "https://znqi2vpr3hftok6dskqe1xn6.151.185.41.212.sslip.io/",
-            "http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io",
-            "https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io",
-            "http://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/",
-            "https://1qjzhcsfbpwndetugbkwufvf.151.185.41.212.sslip.io/",
-            "http://*.151.185.41.212.sslip.io",
-            "https://*.151.185.41.212.sslip.io"
+            "https://*.beta-softnet.com",
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:[*]",
+            "http://127.0.0.1:[*]"
         ));
 
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
-        configuration.setAllowCredentials(true); // ✅ Changed to true
+        configuration.setExposedHeaders(Arrays.asList("Authorization", "Content-Disposition", "X-Total-Count", "Link"));
+        configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
+    }
+
+    @Bean
+    public CorsFilter corsFilter() {
+        return new CorsFilter(corsConfigurationSource());
     }
 }
