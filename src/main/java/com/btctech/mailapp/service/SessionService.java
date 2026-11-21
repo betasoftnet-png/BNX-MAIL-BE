@@ -20,6 +20,9 @@ import java.util.Base64;
 public class SessionService {
     
     private final UserSessionRepository sessionRepository;
+    private final com.btctech.mailapp.config.JwtUtil jwtUtil;
+    private final com.btctech.mailapp.repository.UserRepository userRepository;
+    private final com.btctech.mailapp.repository.MailAccountRepository mailAccountRepository;
     
     @Value("${encryption.key:1234567890123456}")
     private String encryptionKey;
@@ -120,22 +123,73 @@ public class SessionService {
      */
     public String getPasswordFromSession(String jwtToken) {
         try {
-            UserSession session = sessionRepository.findByJwtToken(jwtToken)
-                    .orElseThrow(() -> new MailException("Session not found. Please login again."));
-            
-            // Check expiry
-            if (session.getExpiresAt().isBefore(LocalDateTime.now())) {
-                log.warn("Session expired for user: {}", session.getUserId());
-                sessionRepository.delete(session);
-                throw new MailException("Session expired. Please login again.");
+            java.util.Optional<UserSession> sessionOpt = sessionRepository.findByJwtToken(jwtToken);
+            if (sessionOpt.isPresent()) {
+                UserSession session = sessionOpt.get();
+                if (session.getExpiresAt().isBefore(LocalDateTime.now())) {
+                    log.warn("Session expired for user: {}", session.getUserId());
+                    sessionRepository.delete(session);
+                } else {
+                    return decrypt(session.getEncryptedPassword());
+                }
             }
-            
-            // Decrypt password
-            String password = decrypt(session.getEncryptedPassword());
-            log.debug("Retrieved password for user: {}", session.getUserId());
-            
-            return password;
-            
+
+            // Fallback 1: Extract email from JWT and find active session or persistent password for user
+            String email = null;
+            try {
+                if (jwtUtil != null) {
+                    email = jwtUtil.extractEmail(jwtToken);
+                }
+            } catch (Exception ex) {
+                log.warn("Could not extract email from token in SessionService: {}", ex.getMessage());
+            }
+
+            if (email != null && userRepository != null) {
+                var userOpt = userRepository.findByEmail(email);
+                if (userOpt.isEmpty()) {
+                    userOpt = userRepository.findByUsername(email);
+                }
+                if (userOpt.isPresent()) {
+                    com.btctech.mailapp.entity.User user = userOpt.get();
+                    
+                    // Check if there is another valid session for this user
+                    String recoveredPassword = getPasswordByUserId(user.getId());
+                    
+                    // Fallback 2: Check MailAccount persistent encrypted password
+                    if (recoveredPassword == null && mailAccountRepository != null) {
+                        var accounts = mailAccountRepository.findByUserId(user.getId());
+                        for (com.btctech.mailapp.entity.MailAccount acc : accounts) {
+                            if (acc.getEncryptedPassword() != null) {
+                                try {
+                                    recoveredPassword = decrypt(acc.getEncryptedPassword());
+                                    if (recoveredPassword != null) {
+                                        break;
+                                    }
+                                } catch (Exception e) {
+                                    // ignore decryption error
+                                }
+                            }
+                        }
+                    }
+
+                    if (recoveredPassword != null) {
+                        // Auto-bind this new jwtToken to a new UserSession so future lookups are instant
+                        try {
+                            var primaryAcc = mailAccountRepository.findByUserIdAndIsPrimary(user.getId(), true)
+                                    .orElse(mailAccountRepository.findByUserId(user.getId()).stream().findFirst().orElse(null));
+                            if (primaryAcc != null) {
+                                createSession(user.getId(), primaryAcc.getId(), recoveredPassword, jwtToken);
+                                log.info("✓ Auto-bound and recovered session for token of user: {}", email);
+                            }
+                        } catch (Exception e) {
+                            log.warn("Could not auto-bind session: {}", e.getMessage());
+                        }
+                        return recoveredPassword;
+                    }
+                }
+            }
+
+            throw new MailException("Session not found. Please login again.");
         } catch (MailException e) {
             throw e;
         } catch (Exception e) {
