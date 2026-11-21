@@ -98,8 +98,6 @@ public class SecurityConfig {
             "https://www.cliks.beta-softnet.com",
             "http://cliks.beta-softnet.com",
             "https://cliksbusiness.com",
-            "https://www.bnxmail.com",
-            "https://bnxmail.com",
             "https://account.beta-softnet.com",
             "https://www.beta-softnet.com",
             "https://beta-softnet.com",
