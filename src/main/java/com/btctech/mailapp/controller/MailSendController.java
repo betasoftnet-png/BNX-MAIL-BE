@@ -118,37 +118,41 @@ public class MailSendController {
 
             if (delaySeconds > 0) {
                 // Delayed delivery with 5-second Undo Send window
-                com.btctech.mailapp.entity.PendingEmail pending = pendingEmailService.queuePendingEmail(
-                        fromEmail, userId, mailAccount.getId(), password, request, delaySeconds);
+                try {
+                    com.btctech.mailapp.entity.PendingEmail pending = pendingEmailService.queuePendingEmail(
+                            fromEmail, userId, mailAccount.getId(), password, request, delaySeconds);
 
-                long expiresAt = java.time.ZonedDateTime.of(pending.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+                    long expiresAt = java.time.ZonedDateTime.of(pending.getUndoDeadline(), java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
 
-                Map<String, Object> data = new HashMap<>();
-                data.put("sendId", pending.getSendId());
-                data.put("status", pending.getStatus());
-                data.put("delaySeconds", delaySeconds);
-                data.put("undoDeadline", pending.getUndoDeadline().toString());
-                data.put("expiresAt", expiresAt);
-                data.put("from", fromEmail);
-                data.put("to", request.getTo());
-                data.put("cc", request.getCc());
-                data.put("bcc", request.getBcc());
-                data.put("subject", request.getSubject());
-                data.put("body", request.getBody());
-                data.put("isHtml", request.getIsHtml());
-                data.put("sentAt", System.currentTimeMillis());
-                data.put("starred", isStarred);
-                data.put("isStarred", isStarred);
-                if (request.getReadReceiptId() != null) {
-                    data.put("readReceiptId", request.getReadReceiptId());
-                    data.put("readReceiptRequested", true);
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("sendId", pending.getSendId());
+                    data.put("status", pending.getStatus());
+                    data.put("delaySeconds", delaySeconds);
+                    data.put("undoDeadline", pending.getUndoDeadline().toString());
+                    data.put("expiresAt", expiresAt);
+                    data.put("from", fromEmail);
+                    data.put("to", request.getTo());
+                    data.put("cc", request.getCc());
+                    data.put("bcc", request.getBcc());
+                    data.put("subject", request.getSubject());
+                    data.put("body", request.getBody());
+                    data.put("isHtml", request.getIsHtml());
+                    data.put("sentAt", System.currentTimeMillis());
+                    data.put("starred", isStarred);
+                    data.put("isStarred", isStarred);
+                    if (request.getReadReceiptId() != null) {
+                        data.put("readReceiptId", request.getReadReceiptId());
+                        data.put("readReceiptRequested", true);
+                    }
+
+                    log.info("✓ Email queued with {}s undo window (sendId={}) from {} to {}", delaySeconds, pending.getSendId(), fromEmail, request.getTo());
+                    return ResponseEntity.ok(ApiResponse.success(data, "Message sent"));
+                } catch (Exception queueEx) {
+                    log.warn("Failed to queue pending email with undo window (falling back to immediate send): {}", queueEx.getMessage());
                 }
-
-                log.info("✓ Email queued with {}s undo window (sendId={}) from {} to {}", delaySeconds, pending.getSendId(), fromEmail, request.getTo());
-                return ResponseEntity.ok(ApiResponse.success(data, "Message sent"));
             }
 
-            // Immediate send fallback if undoDelay is explicitly 0
+            // Immediate send fallback if undoDelay is explicitly 0 or if queuePendingEmail threw an error
             String sentUid = mailSendService.sendMail(fromEmail, password, request);
 
             // Response payload
