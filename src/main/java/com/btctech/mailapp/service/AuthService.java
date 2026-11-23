@@ -499,15 +499,35 @@ public class AuthService {
                 .map(this::verifyExpiration)
                 .map(RefreshToken::getUser)
                 .map(user -> {
-                    String accessToken = jwtUtil.generateTokenForUser(user, user.getEmail());
+                    // Identify the primary mailbox account for token subject and IMAP password migration
+                    List<MailAccount> userMailboxes = mailboxService.getUserEmails(user.getId());
+                    MailAccount primaryAccount = userMailboxes != null ? userMailboxes.stream()
+                            .filter(a -> Boolean.TRUE.equals(a.getIsPrimary()))
+                            .findFirst()
+                            .orElseGet(() -> !userMailboxes.isEmpty() ? userMailboxes.get(0) : null) : null;
+
+                    String identifier = (primaryAccount != null && primaryAccount.getEmail() != null)
+                            ? primaryAccount.getEmail()
+                            : (user.getEmail() != null && !user.getEmail().trim().isEmpty() ? user.getEmail() : user.getUsername());
+
+                    String accessToken = jwtUtil.generateTokenForUser(user, identifier);
                     
-                    // ✅ FIX: Migrate password session to new access token
+                    // Migrate password session to new access token
                     try {
                         String password = sessionService.getPasswordByUserId(user.getId());
-                        if (password != null) {
-                            MailAccount primaryAccount = mailboxService.getPrimaryEmail(user.getId());
+                        if (password == null && primaryAccount != null && primaryAccount.getEncryptedPassword() != null) {
+                            try {
+                                password = sessionService.decrypt(primaryAccount.getEncryptedPassword());
+                            } catch (Exception ex) {
+                                log.warn("Could not decrypt primary account encrypted password: {}", ex.getMessage());
+                            }
+                        }
+
+                        if (password != null && primaryAccount != null) {
                             sessionService.createSession(user.getId(), primaryAccount.getId(), password, accessToken);
-                            log.info("✓ Migrated session to new access token for user: {}", user.getUsername());
+                            log.info("✓ Migrated session to new access token for user: {} (account: {})", user.getUsername(), primaryAccount.getEmail());
+                        } else {
+                            log.warn("⚠ Session password unavailable during token refresh for user: {}", user.getUsername());
                         }
                     } catch (Exception e) {
                         log.warn("⚠ Could not migrate password session during token refresh: {}", e.getMessage());
