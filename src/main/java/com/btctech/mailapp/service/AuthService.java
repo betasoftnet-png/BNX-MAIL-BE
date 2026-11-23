@@ -443,7 +443,7 @@ public class AuthService {
                 .ipAddress(ipAddress)
                 .userAgent(userAgent)
                 .location(location)
-                .expiryDate(Instant.now().plusMillis(604800000)) // 7 days
+                .expiryDate(Instant.now().plusMillis(2592000000L)) // 30 days
                 .build();
 
         refreshTokenRepository.save(refreshToken);
@@ -497,6 +497,12 @@ public class AuthService {
 
         return refreshTokenRepository.findByToken(requestRefreshToken)
                 .map(this::verifyExpiration)
+                .map(token -> {
+                    // Sliding session: extend refresh token validity by 30 days on active use
+                    token.setExpiryDate(Instant.now().plusMillis(2592000000L));
+                    refreshTokenRepository.save(token);
+                    return token;
+                })
                 .map(RefreshToken::getUser)
                 .map(user -> {
                     // Identify the primary mailbox account for token subject and IMAP password migration
@@ -515,11 +521,28 @@ public class AuthService {
                     // Migrate password session to new access token
                     try {
                         String password = sessionService.getPasswordByUserId(user.getId());
+                        
+                        // Fallback 1: check primaryAccount persistent encrypted password
                         if (password == null && primaryAccount != null && primaryAccount.getEncryptedPassword() != null) {
                             try {
                                 password = sessionService.decrypt(primaryAccount.getEncryptedPassword());
                             } catch (Exception ex) {
                                 log.warn("Could not decrypt primary account encrypted password: {}", ex.getMessage());
+                            }
+                        }
+
+                        // Fallback 2: search all user mailboxes if primaryAccount didn't have AES password
+                        if (password == null && userMailboxes != null) {
+                            for (MailAccount acc : userMailboxes) {
+                                if (acc.getEncryptedPassword() != null && !acc.getEncryptedPassword().startsWith("{BLF-CRYPT}")) {
+                                    try {
+                                        String dec = sessionService.decrypt(acc.getEncryptedPassword());
+                                        if (dec != null && !dec.isEmpty()) {
+                                            password = dec;
+                                            break;
+                                        }
+                                    } catch (Exception ignored) {}
+                                }
                             }
                         }
 

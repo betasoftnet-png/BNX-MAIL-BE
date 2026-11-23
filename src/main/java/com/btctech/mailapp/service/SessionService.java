@@ -227,9 +227,10 @@ public class SessionService {
                 return null;
             }
             
-            // Get the most recent non-expired session
+            // Get the most recent non-expired session (sort by ID descending)
             UserSession session = sessions.stream()
                 .filter(s -> s.getExpiresAt().isAfter(LocalDateTime.now()))
+                .sorted((a, b) -> b.getId().compareTo(a.getId()))
                 .findFirst()
                 .orElse(null);
                 
