@@ -23,6 +23,13 @@ public class MailReceiveController {
     private final MailReceiveService mailReceiveService;
     private final SessionService sessionService;
     private final com.btctech.mailapp.service.RecipientSuggestionService recipientSuggestionService;
+    private final com.btctech.mailapp.service.MailboxService mailboxService;
+
+    private String resolveEmail(Authentication authentication) {
+        if (authentication == null) return null;
+        String name = authentication.getName();
+        return mailboxService != null ? mailboxService.resolveMailboxEmail(name) : name;
+    }
 
     private boolean isAuthenticationOrSessionError(Throwable e) {
         if (e == null) return false;
@@ -48,14 +55,16 @@ public class MailReceiveController {
             Authentication authentication) {
 
         try {
-            String email = authentication.getName();
-            log.info("Get inbox request from: {}", email);
+            String email = resolveEmail(authentication);
+            log.info("[MAIL DIAGNOSTIC] GET /api/mail/inbox | Auth subject: {} | Resolved mailbox: {}", 
+                    authentication != null ? authentication.getName() : "null", email);
 
             // Get password from session
             String token = authHeader.substring(7);
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null) {
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/inbox: Session password is null for user: {}", email);
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
@@ -84,7 +93,7 @@ public class MailReceiveController {
                     .emails(emails)
                     .build();
 
-            log.info("✓ Fetched {} emails for {}", emails.size(), email);
+            log.info("[MAIL DIAGNOSTIC] ✓ Fetched {} inbox emails for {}", emails.size(), email);
 
             return ResponseEntity.ok(
                     ApiResponse.success(response, "Inbox fetched successfully"));
@@ -92,11 +101,11 @@ public class MailReceiveController {
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
             if (isAuthenticationOrSessionError(e)) {
-                log.warn("Session/auth expired during inbox fetch for {}: {}", userEmail, e.getMessage());
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/inbox: Session/auth expired during fetch for {}: {}", userEmail, e.getMessage());
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired or invalid credentials. Please login again."));
             }
-            log.error("CRITICAL error fetching inbox for {}: {}", userEmail, e.getMessage(), e);
+            log.error("[MAIL DIAGNOSTIC] ✗ 500 CRITICAL error fetching inbox for {}: {}", userEmail, e.getMessage(), e);
             return ResponseEntity.status(500)
                     .body(ApiResponse.error("Failed to fetch inbox: " + e.getMessage()));
         }
@@ -113,14 +122,16 @@ public class MailReceiveController {
             Authentication authentication) {
 
         try {
-            String email = authentication.getName();
-            log.info("Get unread emails request from: {}", email);
+            String email = resolveEmail(authentication);
+            log.info("[MAIL DIAGNOSTIC] GET /api/mail/unread | Auth subject: {} | Resolved mailbox: {}", 
+                    authentication != null ? authentication.getName() : "null", email);
 
             // Get password from session
             String token = authHeader.substring(7);
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null) {
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/unread: Session password is null for user: {}", email);
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
@@ -138,7 +149,7 @@ public class MailReceiveController {
                     .emails(emails)
                     .build();
 
-            log.info("✓ Fetched {} unread emails for {}", emails.size(), email);
+            log.info("[MAIL DIAGNOSTIC] ✓ Fetched {} unread emails for {}", emails.size(), email);
 
             return ResponseEntity.ok(
                     ApiResponse.success(response, "Unread emails fetched successfully"));
@@ -146,11 +157,11 @@ public class MailReceiveController {
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
             if (isAuthenticationOrSessionError(e)) {
-                log.warn("Session/auth expired during unread fetch for {}: {}", userEmail, e.getMessage());
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/unread: Session/auth expired during fetch for {}: {}", userEmail, e.getMessage());
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired or invalid credentials. Please login again."));
             }
-            log.error("CRITICAL error fetching unread emails for {}: {}", userEmail, e.getMessage(), e);
+            log.error("[MAIL DIAGNOSTIC] ✗ 500 CRITICAL error fetching unread emails for {}: {}", userEmail, e.getMessage(), e);
             return ResponseEntity.status(500)
                     .body(ApiResponse.error("Failed to fetch unread emails: " + e.getMessage()));
         }
@@ -270,14 +281,16 @@ public class MailReceiveController {
             Authentication authentication) {
 
         try {
-            String email = authentication.getName();
-            log.info("Get sent emails request from: {}", email);
+            String email = resolveEmail(authentication);
+            log.info("[MAIL DIAGNOSTIC] GET /api/mail/sent | Auth subject: {} | Resolved mailbox: {}", 
+                    authentication != null ? authentication.getName() : "null", email);
 
             // Get password from session
             String token = authHeader.substring(7);
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null) {
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/sent: Session password is null for user: {}", email);
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired. Please login again."));
             }
@@ -295,7 +308,7 @@ public class MailReceiveController {
                     .emails(emails)
                     .build();
 
-            log.info("✓ Fetched {} sent emails for {}", emails.size(), email);
+            log.info("[MAIL DIAGNOSTIC] ✓ Fetched {} sent emails for {}", emails.size(), email);
 
             return ResponseEntity.ok(
                     ApiResponse.success(response, "Sent emails fetched successfully"));
@@ -303,11 +316,11 @@ public class MailReceiveController {
         } catch (Throwable e) {
             String userEmail = (authentication != null) ? authentication.getName() : "Unknown User";
             if (isAuthenticationOrSessionError(e)) {
-                log.warn("Session/auth expired during sent fetch for {}: {}", userEmail, e.getMessage());
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/sent: Session/auth expired during sent fetch for {}: {}", userEmail, e.getMessage());
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired or invalid credentials. Please login again."));
             }
-            log.error("CRITICAL error fetching sent emails for {}: {}", userEmail, e.getMessage(), e);
+            log.error("[MAIL DIAGNOSTIC] ✗ 500 CRITICAL error fetching sent emails for {}: {}", userEmail, e.getMessage(), e);
             return ResponseEntity.status(500)
                     .body(ApiResponse.error("Failed to fetch sent emails: " + e.getMessage()));
         }

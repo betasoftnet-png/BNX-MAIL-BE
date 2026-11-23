@@ -66,12 +66,14 @@ public class MailSendController {
             Authentication authentication) {
 
         try {
-            // Get email from authentication context
-            String fromEmail = authentication.getName();
-            log.info("Send mail request from {} to {}", fromEmail, request.getTo());
+            // Get email from authentication context (safely resolved to active mailbox)
+            String fromEmail = mailboxService.resolveMailboxEmail(authentication.getName());
+            log.info("[MAIL DIAGNOSTIC] POST /api/mail/send | Auth: {} | From: {} | To: {}", 
+                    authentication.getName(), fromEmail, request.getTo());
 
             // Extract JWT token
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                log.warn("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/send: Missing or invalid Authorization header");
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Missing or invalid Authorization header"));
             }
@@ -81,7 +83,7 @@ public class MailSendController {
             String password = sessionService.getPasswordFromSession(token);
 
             if (password == null || password.isEmpty()) {
-                log.error("Password not found in session for {}", fromEmail);
+                log.error("[MAIL DIAGNOSTIC] ✗ 401 REJECTION on /api/mail/send: Password not found in session for {}", fromEmail);
                 return ResponseEntity.status(401)
                         .body(ApiResponse.error("Session expired or invalid. Please login again."));
             }

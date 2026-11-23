@@ -127,42 +127,56 @@ public class SessionService {
             if (sessionOpt.isPresent()) {
                 UserSession session = sessionOpt.get();
                 if (session.getExpiresAt().isBefore(LocalDateTime.now())) {
-                    log.warn("Session expired for user: {}", session.getUserId());
+                    log.warn("[SESSION DIAGNOSTIC] Session expired for user ID: {}", session.getUserId());
                     sessionRepository.delete(session);
                 } else {
                     return decrypt(session.getEncryptedPassword());
                 }
             }
 
-            // Fallback 1: Extract email from JWT and find active session or persistent password for user
+            // Fallback: Token refreshed or session row absent; recover from user and mail account
             String email = null;
             try {
                 if (jwtUtil != null) {
                     email = jwtUtil.extractEmail(jwtToken);
                 }
             } catch (Exception ex) {
-                log.warn("Could not extract email from token in SessionService: {}", ex.getMessage());
+                log.warn("[SESSION DIAGNOSTIC] Could not extract email from token: {}", ex.getMessage());
             }
 
-            if (email != null && userRepository != null) {
-                var userOpt = userRepository.findByEmail(email);
-                if (userOpt.isEmpty()) {
-                    userOpt = userRepository.findByUsername(email);
+            if (email != null) {
+                String cleanEmail = email.trim().toLowerCase();
+                com.btctech.mailapp.entity.User user = null;
+                if (userRepository != null) {
+                    user = userRepository.findByEmail(cleanEmail)
+                            .or(() -> userRepository.findByUsername(cleanEmail))
+                            .orElse(null);
                 }
-                if (userOpt.isPresent()) {
-                    com.btctech.mailapp.entity.User user = userOpt.get();
-                    
-                    // Check if there is another valid session for this user
+                if (user == null && mailAccountRepository != null) {
+                    var accOpt = mailAccountRepository.findByEmail(cleanEmail);
+                    if (accOpt.isPresent()) {
+                        user = userRepository.findById(accOpt.get().getUserId()).orElse(null);
+                    }
+                }
+                if (user == null && cleanEmail.contains("@")) {
+                    String usernamePart = cleanEmail.substring(0, cleanEmail.indexOf('@')).trim();
+                    if (!usernamePart.isEmpty() && userRepository != null) {
+                        user = userRepository.findByUsername(usernamePart).orElse(null);
+                    }
+                }
+
+                if (user != null) {
+                    // Check if there is another valid active session for this user
                     String recoveredPassword = getPasswordByUserId(user.getId());
-                    
+
                     // Fallback 2: Check MailAccount persistent encrypted password
                     if (recoveredPassword == null && mailAccountRepository != null) {
                         var accounts = mailAccountRepository.findByUserId(user.getId());
                         for (com.btctech.mailapp.entity.MailAccount acc : accounts) {
-                            if (acc.getEncryptedPassword() != null) {
+                            if (acc.getEncryptedPassword() != null && !acc.getEncryptedPassword().startsWith("{BLF-CRYPT}")) {
                                 try {
                                     recoveredPassword = decrypt(acc.getEncryptedPassword());
-                                    if (recoveredPassword != null) {
+                                    if (recoveredPassword != null && !recoveredPassword.isEmpty()) {
                                         break;
                                     }
                                 } catch (Exception e) {
@@ -172,20 +186,24 @@ public class SessionService {
                         }
                     }
 
-                    if (recoveredPassword != null) {
-                        // Auto-bind this new jwtToken to a new UserSession so future lookups are instant
+                    if (recoveredPassword != null && !recoveredPassword.isEmpty()) {
+                        // Auto-bind this jwtToken to a new UserSession so future lookups are instant
                         try {
                             var primaryAcc = mailAccountRepository.findByUserIdAndIsPrimary(user.getId(), true)
                                     .orElse(mailAccountRepository.findByUserId(user.getId()).stream().findFirst().orElse(null));
                             if (primaryAcc != null) {
                                 createSession(user.getId(), primaryAcc.getId(), recoveredPassword, jwtToken);
-                                log.info("✓ Auto-bound and recovered session for token of user: {}", email);
+                                log.info("[SESSION DIAGNOSTIC] ✓ Auto-bound recovered session for user: {} (mailbox: {})", user.getUsername(), primaryAcc.getEmail());
                             }
                         } catch (Exception e) {
-                            log.warn("Could not auto-bind session: {}", e.getMessage());
+                            log.warn("[SESSION DIAGNOSTIC] Could not auto-bind session: {}", e.getMessage());
                         }
                         return recoveredPassword;
+                    } else {
+                        log.warn("[SESSION DIAGNOSTIC] ✗ Password recovery failed for user ID: {}", user.getId());
                     }
+                } else {
+                    log.warn("[SESSION DIAGNOSTIC] ✗ User not found during session recovery for identifier: {}", email);
                 }
             }
 
@@ -193,7 +211,7 @@ public class SessionService {
         } catch (MailException e) {
             throw e;
         } catch (Exception e) {
-            log.error("Failed to get password from session: {}", e.getMessage(), e);
+            log.error("[SESSION DIAGNOSTIC] ✗ Failed to get password from session: {}", e.getMessage(), e);
             throw new MailException("Failed to retrieve session. Please login again.");
         }
     }

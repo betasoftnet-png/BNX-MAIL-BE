@@ -185,6 +185,40 @@ public class MailboxService {
                 .orElseThrow(() -> new MailException("Mail account not found: " + email));
     }
     
+    /**
+     * Safely resolve any identifier (username, personal email, or alias) to the active mailbox email
+     */
+    public String resolveMailboxEmail(String identifier) {
+        if (identifier == null || identifier.trim().isEmpty()) {
+            return identifier;
+        }
+        String clean = identifier.trim().toLowerCase();
+        // 1. Direct match in mail accounts
+        java.util.Optional<MailAccount> accountOpt = mailAccountRepository.findByEmail(clean);
+        if (accountOpt.isPresent()) {
+            return accountOpt.get().getEmail();
+        }
+
+        // 2. Resolve via user
+        try {
+            User user = userRepository.findByEmail(clean)
+                    .or(() -> userRepository.findByUsername(clean))
+                    .orElse(null);
+            if (user != null) {
+                List<MailAccount> userMailboxes = mailAccountRepository.findByUserId(user.getId());
+                MailAccount primary = userMailboxes.stream()
+                        .filter(a -> Boolean.TRUE.equals(a.getIsPrimary()))
+                        .findFirst()
+                        .orElseGet(() -> !userMailboxes.isEmpty() ? userMailboxes.get(0) : null);
+                if (primary != null && primary.getEmail() != null) {
+                    return primary.getEmail();
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return clean;
+    }
+    
     @Transactional
     public void setPrimaryEmail(Long userId, Long mailAccountId) {
         log.info("Setting primary email for user: {} to account ID: {}", userId, mailAccountId);

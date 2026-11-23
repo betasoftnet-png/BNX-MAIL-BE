@@ -314,29 +314,44 @@ public class AuthController {
             return ResponseEntity.ok(ApiResponse.success(challengeData, "Two-factor authentication required"));
         }
 
-        // 4. Generate Dual Tokens
-        String accessToken = jwtUtil.generateTokenForUser(user, request.getEmail());
+        // 4. Resolve primary mailbox account safely
+        List<MailAccount> userMailboxes = mailboxService.getUserEmails(user.getId());
+        MailAccount mailAccount = userMailboxes != null ? userMailboxes.stream()
+                .filter(a -> Boolean.TRUE.equals(a.getIsPrimary()))
+                .findFirst()
+                .orElseGet(() -> !userMailboxes.isEmpty() ? userMailboxes.get(0) : null) : null;
+        if (mailAccount == null) {
+            try {
+                mailAccount = mailboxService.getMailAccountByEmail(request.getEmail().trim().toLowerCase());
+            } catch (Exception ignored) {}
+        }
+
+        String identifier = (mailAccount != null && mailAccount.getEmail() != null)
+                ? mailAccount.getEmail().trim().toLowerCase()
+                : (user.getEmail() != null && !user.getEmail().trim().isEmpty() ? user.getEmail().trim().toLowerCase() : user.getUsername().trim().toLowerCase());
+
+        // 5. Generate Dual Tokens with consistent identifier
+        String accessToken = jwtUtil.generateTokenForUser(user, identifier);
         String refreshToken = authService.createRefreshToken(user, ipAddress, userAgent);
 
-        // 5. Get primary mail account for session
-        MailAccount mailAccount = mailboxService.getMailAccountByEmail(request.getEmail());
-
         // 6. Create session (store password linked to accessToken)
-        sessionService.createSession(user.getId(), mailAccount.getId(),
-                request.getPassword(), accessToken);
+        if (mailAccount != null) {
+            sessionService.createSession(user.getId(), mailAccount.getId(),
+                    request.getPassword(), accessToken);
 
-        // 7. BACKFILL: Ensure MailAccount has an encrypted_password for Always-On sending
-        if (mailAccount.getEncryptedPassword() == null) {
-            try {
-                mailAccount.setEncryptedPassword(sessionService.encrypt(request.getPassword()));
-                mailboxService.saveMailAccount(mailAccount);
-                log.info("✓ Backfilled encrypted SMTP password for: {}", mailAccount.getEmail());
-            } catch (Exception e) {
-                log.error("Failed to backfill encrypted password: {}", e.getMessage());
+            // 7. BACKFILL: Ensure MailAccount has an encrypted_password for Always-On sending & session recovery
+            if (mailAccount.getEncryptedPassword() == null || mailAccount.getEncryptedPassword().startsWith("{BLF-CRYPT}")) {
+                try {
+                    mailAccount.setEncryptedPassword(sessionService.encrypt(request.getPassword()));
+                    mailboxService.saveMailAccount(mailAccount);
+                    log.info("✓ Backfilled encrypted SMTP password for: {}", mailAccount.getEmail());
+                } catch (Exception e) {
+                    log.error("Failed to backfill encrypted password: {}", e.getMessage());
+                }
             }
         }
 
-        // 7. Build Rich SaaS Response
+        // 8. Build Rich SaaS Response
         com.btctech.mailapp.dto.LoginResponseData data = authService.buildLoginResponse(user, result.isAutoUpgraded(), accessToken, refreshToken);
 
         return ResponseEntity.ok(
@@ -398,8 +413,24 @@ public class AuthController {
                 ipAddress = ipAddress.split(",")[0].trim();
             }
             String userAgent = httpRequest.getHeader("User-Agent");
-            
-            String accessToken = jwtUtil.generateTokenForUser(user, email);
+
+            // Safely resolve primary mailbox account
+            List<MailAccount> userMailboxes = mailboxService.getUserEmails(user.getId());
+            MailAccount mailAccount = userMailboxes != null ? userMailboxes.stream()
+                    .filter(a -> Boolean.TRUE.equals(a.getIsPrimary()))
+                    .findFirst()
+                    .orElseGet(() -> !userMailboxes.isEmpty() ? userMailboxes.get(0) : null) : null;
+            if (mailAccount == null) {
+                try {
+                    mailAccount = mailboxService.getMailAccountByEmail(email.trim().toLowerCase());
+                } catch (Exception ignored) {}
+            }
+
+            String identifier = (mailAccount != null && mailAccount.getEmail() != null)
+                    ? mailAccount.getEmail().trim().toLowerCase()
+                    : (user.getEmail() != null && !user.getEmail().trim().isEmpty() ? user.getEmail().trim().toLowerCase() : user.getUsername().trim().toLowerCase());
+
+            String accessToken = jwtUtil.generateTokenForUser(user, identifier);
             String refreshToken = authService.createRefreshToken(user, ipAddress, userAgent);
             
             try {
@@ -408,10 +439,16 @@ public class AuthController {
                 String encryptedPassword = claims.get("ep", String.class);
                 if (encryptedPassword != null) {
                     String password = sessionService.decrypt(encryptedPassword);
-                    // Get primary mail account for session
-                    MailAccount mailAccount = mailboxService.getMailAccountByEmail(email);
                     if (mailAccount != null) {
                         sessionService.createSession(user.getId(), mailAccount.getId(), password, accessToken);
+
+                        // Backfill encrypted password if needed
+                        if (mailAccount.getEncryptedPassword() == null || mailAccount.getEncryptedPassword().startsWith("{BLF-CRYPT}")) {
+                            try {
+                                mailAccount.setEncryptedPassword(sessionService.encrypt(password));
+                                mailboxService.saveMailAccount(mailAccount);
+                            } catch (Exception ignored) {}
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -419,6 +456,7 @@ public class AuthController {
             }
             
             com.btctech.mailapp.dto.LoginResponseData data = authService.buildLoginResponse(user, false, accessToken, refreshToken);
+            log.info("[AUTH DIAGNOSTIC] ✓ 2FA Login success for user: {} | Token subject: {}", user.getUsername(), identifier);
             return ResponseEntity.ok(ApiResponse.success(data, "Login successful"));
         } else {
             return ResponseEntity.badRequest().body(ApiResponse.error("Invalid 2FA code or recovery code"));
@@ -478,8 +516,10 @@ public class AuthController {
     public ResponseEntity<ApiResponse<com.btctech.mailapp.dto.LoginResponseData>> refresh(
             @Valid @RequestBody com.btctech.mailapp.dto.TokenRefreshRequest request) {
         
-        log.info("Token rotation request");
+        log.info("[AUTH DIAGNOSTIC] Token rotation/refresh request received");
         com.btctech.mailapp.dto.LoginResponseData data = authService.refreshToken(request);
+        log.info("[AUTH DIAGNOSTIC] ✓ Token refreshed successfully for user: {} | New token subject: {}", 
+                data.getUsername(), data.getEmail());
         
         return ResponseEntity.ok(
                 ApiResponse.success(data, "Token refreshed successfully"));

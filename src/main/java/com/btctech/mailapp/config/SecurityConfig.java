@@ -70,11 +70,14 @@ public class SecurityConfig {
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) -> {
-                            log.error("✗ Unauthorized access attempt to {}: {}", request.getRequestURI(), authException.getMessage());
+                            boolean hasAuth = request.getHeader("Authorization") != null || request.getHeader("authorization") != null;
+                            log.error("[AUTH DIAGNOSTIC] ✗ 401 UNAUTHORIZED for URI: {} | Method: {} | Auth Header Present: {} | Message: {}", 
+                                    request.getRequestURI(), request.getMethod(), hasAuth, authException.getMessage());
                             response.sendError(401, "Unauthorized: " + authException.getMessage());
                         })
                         .accessDeniedHandler((request, response, accessDeniedException) -> {
-                            log.error("✗ Access denied for {}: {}", request.getRequestURI(), accessDeniedException.getMessage());
+                            log.error("[AUTH DIAGNOSTIC] ✗ 403 ACCESS DENIED for URI: {} | Message: {}", 
+                                    request.getRequestURI(), accessDeniedException.getMessage());
                             response.sendError(403, "Access Denied: " + accessDeniedException.getMessage());
                         })
                 )
