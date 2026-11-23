@@ -13,6 +13,7 @@ import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
@@ -65,12 +66,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
         ThreadPoolTaskScheduler taskScheduler = new ThreadPoolTaskScheduler();
-        taskScheduler.setPoolSize(1);
-        taskScheduler.setThreadNamePrefix("ws-heartbeat-thread-");
+        taskScheduler.setPoolSize(2);
+        taskScheduler.setThreadNamePrefix("ws-heartbeat-");
         taskScheduler.initialize();
 
         registry.enableSimpleBroker("/topic", "/queue")
-                .setHeartbeatValue(new long[]{10000, 10000})
+                .setHeartbeatValue(new long[]{20000, 20000})
                 .setTaskScheduler(taskScheduler);
 
         registry.setApplicationDestinationPrefixes("/app");
@@ -90,21 +91,50 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
             @Override
             public Message<?> preSend(Message<?> message, MessageChannel channel) {
                 StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-                if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
-                    String authHeader = accessor.getFirstNativeHeader("Authorization");
-                    if (authHeader != null && authHeader.startsWith("Bearer ")) {
-                        String token = authHeader.substring(7);
-                        try {
-                            String email = jwtUtil.extractEmail(token);
-                            if (email != null && jwtUtil.validateToken(token, email)) {
-                                UsernamePasswordAuthenticationToken auth =
-                                        new UsernamePasswordAuthenticationToken(email, null, Collections.emptyList());
-                                accessor.setUser(auth);
-                                log.debug("✓ WebSocket authenticated for user: {}", email);
-                            }
-                        } catch (Exception e) {
-                            log.warn("WebSocket STOMP authentication failed: {}", e.getMessage());
+                if (accessor != null) {
+                    StompCommand command = accessor.getCommand();
+
+                    if (StompCommand.CONNECT.equals(command)) {
+                        String authHeader = accessor.getFirstNativeHeader("Authorization");
+                        if (authHeader == null) {
+                            authHeader = accessor.getFirstNativeHeader("authorization");
                         }
+                        if (authHeader == null) {
+                            authHeader = accessor.getFirstNativeHeader("token");
+                        }
+                        if (authHeader == null) {
+                            authHeader = accessor.getFirstNativeHeader("passcode");
+                        }
+
+                        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                            authHeader = authHeader.substring(7).trim();
+                        }
+
+                        if (authHeader != null && !authHeader.isEmpty()) {
+                            try {
+                                String email = jwtUtil.extractEmail(authHeader);
+                                if (email != null && Boolean.TRUE.equals(jwtUtil.validateToken(authHeader, email))) {
+                                    UsernamePasswordAuthenticationToken auth =
+                                            new UsernamePasswordAuthenticationToken(
+                                                    email,
+                                                    null,
+                                                    Collections.singletonList(new SimpleGrantedAuthority("ROLE_USER"))
+                                            );
+                                    accessor.setUser(auth);
+                                    log.info("✓ WebSocket STOMP authenticated for: {}", email);
+                                } else {
+                                    log.warn("✗ WebSocket STOMP rejected: Invalid or expired token for {}", email);
+                                }
+                            } catch (Exception e) {
+                                log.warn("✗ WebSocket STOMP token validation error: {}", e.getMessage());
+                            }
+                        } else {
+                            log.warn("✗ WebSocket STOMP CONNECT without Authorization header (session={})", accessor.getSessionId());
+                        }
+                    } else if (StompCommand.SUBSCRIBE.equals(command)) {
+                        log.debug("WebSocket client subscribing to: {} (session={})", accessor.getDestination(), accessor.getSessionId());
+                    } else if (StompCommand.DISCONNECT.equals(command)) {
+                        log.debug("WebSocket client disconnecting: session={}", accessor.getSessionId());
                     }
                 }
                 return message;
