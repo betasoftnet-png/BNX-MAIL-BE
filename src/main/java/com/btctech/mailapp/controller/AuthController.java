@@ -516,13 +516,27 @@ public class AuthController {
     public ResponseEntity<ApiResponse<com.btctech.mailapp.dto.LoginResponseData>> refresh(
             @Valid @RequestBody com.btctech.mailapp.dto.TokenRefreshRequest request) {
         
-        log.info("[AUTH DIAGNOSTIC] Token rotation/refresh request received");
-        com.btctech.mailapp.dto.LoginResponseData data = authService.refreshToken(request);
-        log.info("[AUTH DIAGNOSTIC] ✓ Token refreshed successfully for user: {} | New token subject: {}", 
-                data.getUsername(), data.getEmail());
-        
-        return ResponseEntity.ok(
-                ApiResponse.success(data, "Token refreshed successfully"));
+        try {
+            log.info("[AUTH DIAGNOSTIC] Token rotation/refresh request received");
+            com.btctech.mailapp.dto.LoginResponseData data = authService.refreshToken(request);
+            log.info("[AUTH DIAGNOSTIC] ✓ Token refreshed successfully for user: {} | New token subject: {}", 
+                    data.getUsername(), data.getEmail());
+            
+            return ResponseEntity.ok(
+                    ApiResponse.success(data, "Token refreshed successfully"));
+        } catch (com.btctech.mailapp.exception.MailSecurityException e) {
+            log.warn("[AUTH DIAGNOSTIC] 403 Forbidden during token refresh: {}", e.getMessage());
+            return ResponseEntity.status(org.springframework.http.HttpStatus.FORBIDDEN)
+                    .body(ApiResponse.error(e.getMessage()));
+        } catch (com.btctech.mailapp.exception.MailException e) {
+            log.warn("[AUTH DIAGNOSTIC] 401 Unauthorized during token refresh: {}", e.getMessage());
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error(e.getMessage()));
+        } catch (Exception e) {
+            log.error("[AUTH DIAGNOSTIC] Unexpected error during token refresh: ", e);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error("Invalid or expired refresh token: " + e.getMessage()));
+        }
     }
 
     /**

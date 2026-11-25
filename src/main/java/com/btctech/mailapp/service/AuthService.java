@@ -493,7 +493,10 @@ public class AuthService {
      */
     @Transactional
     public LoginResponseData refreshToken(TokenRefreshRequest request) {
-        String requestRefreshToken = request.getRefreshToken();
+        if (request == null || request.getRefreshToken() == null || request.getRefreshToken().trim().isEmpty()) {
+            throw new MailException("Refresh token is required");
+        }
+        String requestRefreshToken = request.getRefreshToken().trim();
 
         return refreshTokenRepository.findByToken(requestRefreshToken)
                 .map(this::verifyExpiration)
@@ -587,19 +590,37 @@ public class AuthService {
     public LoginResponseData buildLoginResponse(User user, boolean autoUpgraded, String accessToken, String refreshToken) {
         List<MailAccount> userMailboxes = mailboxService.getUserEmails(user.getId());
         
-        List<LoginResponseData.MailboxSummary> boxSummaries = userMailboxes.stream()
+        List<LoginResponseData.MailboxSummary> boxSummaries = userMailboxes != null ? userMailboxes.stream()
                 .map(box -> LoginResponseData.MailboxSummary.builder()
                         .emailId(box.getId())
                         .email(box.getEmail())
                         .isPrimary(box.getIsPrimary())
                         .build())
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()) : java.util.Collections.emptyList();
 
         boolean onboardedVal = true;
         if (user.getAccountType() == com.btctech.mailapp.entity.AccountType.BUSINESS) {
             onboardedVal = businessProfileRepository.findByUserId(user.getId())
                     .map(com.btctech.mailapp.entity.BusinessProfile::getOnboarded)
                     .orElse(false);
+        }
+
+        Long accessExpiresIn = 900L;
+        try {
+            if (accessToken != null) {
+                accessExpiresIn = jwtUtil.getExpirationSeconds(accessToken);
+            }
+        } catch (Exception ex) {
+            log.warn("Could not calculate accessToken expiration: {}", ex.getMessage());
+        }
+
+        Long refreshExpiresIn = 2592000L;
+        try {
+            if (refreshToken != null) {
+                refreshExpiresIn = jwtUtil.getExpirationSeconds(refreshToken);
+            }
+        } catch (Exception ex) {
+            log.warn("Could not calculate refreshToken expiration: {}", ex.getMessage());
         }
 
         return LoginResponseData.builder()
@@ -609,13 +630,13 @@ public class AuthService {
                 .lastName(user.getLastName())
                 .email(user.getEmail())
                 .role(user.getRole())
-                .accountType(user.getAccountType().name())
+                .accountType(user.getAccountType() != null ? user.getAccountType().name() : "INDIVIDUAL")
                 .isPrimary(user.getIsPrimary())
                 .appName("BNX Mail")
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
-                .accessTokenExpiresIn(jwtUtil.getExpirationSeconds(accessToken))
-                .refreshTokenExpiresIn(jwtUtil.getExpirationSeconds(refreshToken))
+                .accessTokenExpiresIn(accessExpiresIn)
+                .refreshTokenExpiresIn(refreshExpiresIn)
                 .profilePicture(user.getProfilePicture())
                 .profilePictureUrl(user.getProfilePicture() != null ? "/api/users/profile-picture/" + user.getUsername() : null)
                 .mailboxes(boxSummaries)

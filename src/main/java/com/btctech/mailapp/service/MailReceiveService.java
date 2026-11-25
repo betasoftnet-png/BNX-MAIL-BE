@@ -323,9 +323,10 @@ public class MailReceiveService {
         long limitBytes = 5368709120L; // 5 GB default
 
         try {
-            // First try executing doveadm command since backend runs on the same mail server
-            String[] cmd = {"doveadm", "quota", "get", "-u", email};
-            Process process = Runtime.getRuntime().exec(cmd);
+            // First try executing doveadm command with bounded timeout since backend runs on the same mail server
+            ProcessBuilder pb = new ProcessBuilder("doveadm", "quota", "get", "-u", email);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
             java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()));
             String line;
             boolean foundStorage = false;
@@ -348,7 +349,11 @@ public class MailReceiveService {
                     }
                 }
             }
-            process.waitFor();
+            boolean finished = process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("doveadm command timed out after 3 seconds for user: {}", email);
+            }
 
             if (!foundStorage) {
                 // Fallback to IMAP QUOTA if doveadm fails or is not available
@@ -2367,9 +2372,13 @@ public class MailReceiveService {
         if (imapSslEnable) {
             props.put("mail.imap.ssl.trust", "*");
         }
-        // Set timeouts to prevent hanging threads
+        // Set connection and socket timeouts to prevent hanging threads for both imap and imaps
         props.put("mail.imap.connectiontimeout", "10000");
         props.put("mail.imap.timeout", "10000");
+        props.put("mail.imap.writetimeout", "10000");
+        props.put("mail.imaps.connectiontimeout", "10000");
+        props.put("mail.imaps.timeout", "10000");
+        props.put("mail.imaps.writetimeout", "10000");
         // Ensure fetching content/body does not inadvertently set the \Seen (Read) flag on IMAP server
         props.put("mail.imap.peek", "true");
         props.put("mail.imaps.peek", "true");
