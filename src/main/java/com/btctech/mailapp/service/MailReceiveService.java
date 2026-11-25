@@ -118,7 +118,14 @@ public class MailReceiveService {
             }
             
             folder.open(Folder.READ_ONLY);
-            log.info("Successfully opened '{}'. Message count: {}", actualFolderName, folder.getMessageCount());
+            int messageCount = folder.getMessageCount();
+            int unreadCount = 0;
+            try {
+                unreadCount = folder.getUnreadMessageCount();
+            } catch (Exception ex) {
+                log.debug("Could not get unread count for {}: {}", actualFolderName, ex.getMessage());
+            }
+            log.info("Successfully opened '{}'. Message count: {} (unread: {})", actualFolderName, messageCount, unreadCount);
 
             if (!(folder instanceof UIDFolder)) {
                 log.error("Folder {} does not support UIDs, falling back to message numbers (NOT RECOMMENDED)", actualFolderName);
@@ -170,15 +177,15 @@ public class MailReceiveService {
                 return new FolderResult(spamEmails, uniqueCount);
             }
 
-            int messageCount = folder.getMessageCount();
+            messageCount = folder.getMessageCount();
 
-            if (messageCount == 0) return new FolderResult(new ArrayList<>(), 0);
+            if (messageCount == 0) return new FolderResult(new ArrayList<>(), 0, unreadCount);
 
             int endIndex = messageCount - (page - 1) * limit;
             int startIndex = Math.max(1, endIndex - limit + 1);
 
             if (endIndex < 1) {
-                return new FolderResult(new ArrayList<>(), messageCount);
+                return new FolderResult(new ArrayList<>(), messageCount, unreadCount);
             }
 
             Message[] messages = folder.getMessages(startIndex, endIndex);
@@ -250,7 +257,7 @@ public class MailReceiveService {
                 return 0;
             });
 
-            return new FolderResult(emails, messageCount);
+            return new FolderResult(emails, messageCount, unreadCount);
 
         } catch (MessagingException e) {
             log.error("Failed to fetch folder {}: {}", folderName, e.getMessage(), e);

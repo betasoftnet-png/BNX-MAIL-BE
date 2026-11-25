@@ -14,4 +14,11 @@ import java.util.List;
 public class FolderResult {
     private List<EmailDTO> emails;
     private int totalCount;
+    private int unreadCount;
+
+    public FolderResult(List<EmailDTO> emails, int totalCount) {
+        this.emails = emails;
+        this.totalCount = totalCount;
+        this.unreadCount = 0;
+    }
 }

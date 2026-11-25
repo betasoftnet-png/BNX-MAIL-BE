@@ -82,8 +82,8 @@ public class MailReceiveController {
                 log.info("Filtered inbox to {} emails for category: {}", emails.size(), category);
             }
 
-            // Get unread count
-            int unreadCount = mailReceiveService.getUnreadCount(email, password);
+            // Extract unread count directly from the opened folder to avoid redundant secondary IMAP connection
+            int unreadCount = result.getUnreadCount();
 
             // Build response
             InboxResponse response = InboxResponse.builder()
