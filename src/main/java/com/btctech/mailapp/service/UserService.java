@@ -242,7 +242,15 @@ public class UserService {
      * Authenticate user by email
      */
     public LoginResult authenticate(String email, String password) {
-        User user = userRepository.findByEmail(email)
+        if (email == null || email.trim().isEmpty() || password == null) {
+            throw new MailException("Invalid credentials");
+        }
+        String cleanEmail = email.trim();
+        User user = userRepository.findByEmail(cleanEmail)
+                .or(() -> userRepository.findByMailAccountEmailIgnoreCase(cleanEmail))
+                .or(() -> userRepository.findFirstByEmailIgnoreCase(cleanEmail))
+                .or(() -> userRepository.findFirstByRecoveryEmailIgnoreCase(cleanEmail))
+                .or(() -> userRepository.findByUsername(cleanEmail))
                 .orElseThrow(() -> new MailException("Invalid credentials"));
 
         if (!passwordEncoder.matches(password, user.getPassword())) {

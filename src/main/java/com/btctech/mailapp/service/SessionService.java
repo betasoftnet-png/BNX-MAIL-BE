@@ -35,18 +35,23 @@ public class SessionService {
     public UserSession createSession(Long userId, Long mailAccountId, 
                                      String password, String jwtToken) {
         try {
-            // Check if session already exists for this token
-            sessionRepository.findByJwtToken(jwtToken).ifPresent(existing -> {
-                log.info("Removing existing session for token");
-                sessionRepository.delete(existing);
-            });
+            // Safely remove any existing session for this token to prevent uniqueness violations
+            try {
+                sessionRepository.findByJwtToken(jwtToken).ifPresent(existing -> {
+                    log.info("Removing existing session for token");
+                    sessionRepository.delete(existing);
+                });
+            } catch (Exception ex) {
+                log.debug("Session cleanup note: {}", ex.getMessage());
+            }
             
             // Encrypt password
             String encryptedPassword = encrypt(password);
             
-            // Extract request details (IP, User Agent)
+            // Extract request details (IP, User Agent, Device Name)
             String ipAddress = null;
             String userAgent = null;
+            String deviceName = null;
             String location = null;
             try {
                 org.springframework.web.context.request.ServletRequestAttributes attributes = 
@@ -59,10 +64,21 @@ public class SessionService {
                     } else {
                         ipAddress = ipAddress.split(",")[0].trim();
                     }
+                    deviceName = request.getHeader("X-Device-Name");
                     userAgent = request.getHeader("User-Agent");
+                    if (deviceName == null || deviceName.trim().isEmpty()) {
+                        deviceName = userAgent;
+                    }
                 }
             } catch (Exception e) {
                 log.warn("Could not extract request attributes: {}", e.getMessage());
+            }
+
+            if (deviceName != null && deviceName.length() > 250) {
+                deviceName = deviceName.substring(0, 250);
+            }
+            if (ipAddress != null && ipAddress.length() > 60) {
+                ipAddress = ipAddress.substring(0, 60);
             }
 
             java.time.ZoneId istZone = java.time.ZoneId.of("Asia/Kolkata");
@@ -75,7 +91,7 @@ public class SessionService {
             session.setEncryptedPassword(encryptedPassword);
             session.setJwtToken(jwtToken);
             session.setIpAddress(ipAddress);
-            session.setDeviceName(userAgent);
+            session.setDeviceName(deviceName != null ? deviceName : "Web Browser");
             session.setLocation(null);
             session.setCreatedAt(now);
             session.setLastActiveAt(now);

@@ -411,11 +411,20 @@ public class AuthService {
         // Build the actual JWT for refresh
         String tokenStr = jwtUtil.generateRefreshToken(user.getEmail() != null ? user.getEmail() : user.getUsername());
         
+        String safeUserAgent = userAgent;
+        if (safeUserAgent != null && safeUserAgent.length() > 250) {
+            safeUserAgent = safeUserAgent.substring(0, 250);
+        }
+        String safeIp = ipAddress;
+        if (safeIp != null && safeIp.length() > 60) {
+            safeIp = safeIp.substring(0, 60);
+        }
+
         RefreshToken refreshToken = RefreshToken.builder()
                 .user(user)
                 .token(tokenStr)
-                .ipAddress(ipAddress)
-                .userAgent(userAgent)
+                .ipAddress(safeIp)
+                .userAgent(safeUserAgent)
                 .location(null)
                 .expiryDate(Instant.now().plusMillis(2592000000L)) // 30 days
                 .build();
@@ -637,7 +646,7 @@ public class AuthService {
         boolean onboardedVal = true;
         if (user.getAccountType() == com.btctech.mailapp.entity.AccountType.BUSINESS) {
             onboardedVal = businessProfileRepository.findByUserId(user.getId())
-                    .map(com.btctech.mailapp.entity.BusinessProfile::getOnboarded)
+                    .map(bp -> Boolean.TRUE.equals(bp.getOnboarded()))
                     .orElse(false);
         }
 

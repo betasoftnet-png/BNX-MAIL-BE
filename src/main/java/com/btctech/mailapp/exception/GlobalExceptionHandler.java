@@ -60,6 +60,28 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handle transaction commit and JPA rollback errors → 500 with root cause
+     */
+    @ExceptionHandler(org.springframework.transaction.TransactionSystemException.class)
+    public ResponseEntity<ApiResponse<Object>> handleTransactionException(org.springframework.transaction.TransactionSystemException ex) {
+        Throwable root = ex.getRootCause() != null ? ex.getRootCause() : ex;
+        log.error("Transaction failed: {}", root.getMessage(), root);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error("Transaction failed: " + root.getMessage()));
+    }
+
+    /**
+     * Handle database data access errors
+     */
+    @ExceptionHandler(org.springframework.dao.DataAccessException.class)
+    public ResponseEntity<ApiResponse<Object>> handleDataAccessException(org.springframework.dao.DataAccessException ex) {
+        Throwable root = ex.getRootCause() != null ? ex.getRootCause() : ex;
+        log.error("Database access error: {}", root.getMessage(), root);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error("Database error: " + root.getMessage()));
+    }
+
+    /**
      * Handle all other uncaught exceptions → 500 Internal Server Error
      */
     @ExceptionHandler(Exception.class)
