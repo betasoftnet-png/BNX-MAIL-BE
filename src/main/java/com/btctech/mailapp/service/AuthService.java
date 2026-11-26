@@ -506,7 +506,34 @@ public class AuthService {
         }
         String requestRefreshToken = request.getRefreshToken().trim();
 
-        return refreshTokenRepository.findByToken(requestRefreshToken)
+        java.util.Optional<RefreshToken> tokenOpt = refreshTokenRepository.findByToken(requestRefreshToken);
+
+        // Multi-tab session resilience:
+        // If the exact refresh token string was rotated or desynchronized across tabs,
+        // extract the subject from the signed token and match against active DB sessions.
+        if (tokenOpt.isEmpty()) {
+            try {
+                String subject = jwtUtil.extractUsername(requestRefreshToken);
+                if (subject != null && !subject.trim().isEmpty()) {
+                    User user = userService.getUserByEmailOrUsername(subject.trim());
+                    if (user != null && Boolean.TRUE.equals(user.getActive())) {
+                        List<RefreshToken> activeTokens = refreshTokenRepository.findAllByUserAndRevokedFalse(user);
+                        if (activeTokens != null && !activeTokens.isEmpty()) {
+                            tokenOpt = activeTokens.stream()
+                                    .filter(t -> !t.isExpired() && !t.isRevoked())
+                                    .max(java.util.Comparator.comparing(RefreshToken::getExpiryDate));
+                            if (tokenOpt.isPresent()) {
+                                log.info("[AUTH] Multi-tab session reconciled for user: {}", user.getUsername());
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                log.debug("Multi-tab token fallback check note: {}", ex.getMessage());
+            }
+        }
+
+        return tokenOpt
                 .map(this::verifyExpiration)
                 .map(token -> {
                     // Sliding session: extend refresh token validity by 30 days on active use
@@ -514,8 +541,9 @@ public class AuthService {
                     refreshTokenRepository.save(token);
                     return token;
                 })
-                .map(RefreshToken::getUser)
-                .map(user -> {
+                .map(token -> {
+                    User user = token.getUser();
+                    String canonicalRefreshToken = token.getToken();
                     // Identify the primary mailbox account for token subject and IMAP password migration
                     List<MailAccount> userMailboxes = mailboxService.getUserEmails(user.getId());
                     MailAccount primaryAccount = userMailboxes != null ? userMailboxes.stream()
@@ -567,7 +595,7 @@ public class AuthService {
                         log.warn("⚠ Could not migrate password session during token refresh: {}", e.getMessage());
                     }
 
-                    return buildLoginResponse(user, false, accessToken, requestRefreshToken);
+                    return buildLoginResponse(user, false, accessToken, canonicalRefreshToken);
                 })
                 .orElseThrow(() -> new MailException("Refresh token is not in database!"));
     }

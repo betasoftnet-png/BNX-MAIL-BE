@@ -75,6 +75,7 @@ public class MailReceiveService {
     private final SpamClassifierService spamClassifierService;
     private final SenderReputationRepository senderReputationRepository;
     private final ReadReceiptService readReceiptService;
+    private final Map<String, Long> lastProcessedUserTime = new java.util.concurrent.ConcurrentHashMap<>();
 
 
     /**
@@ -2102,7 +2103,23 @@ public class MailReceiveService {
     private void processIncomingAndSpamEmails(Store store, String userEmail) {
         if (store == null || userEmail == null || userEmail.trim().isEmpty()) return;
 
+        String cleanUser = userEmail.trim().toLowerCase();
+        long nowMs = System.currentTimeMillis();
+        Long lastRun = lastProcessedUserTime.get(cleanUser);
+        // Throttle full folder spam processing to at most once every 60 seconds per user
+        // This prevents rapid or concurrent inbox requests from locking Dovecot mailboxes and timing out
+        if (lastRun != null && (nowMs - lastRun) < 60000L) {
+            return;
+        }
+
         synchronized (userEmail.intern()) {
+            // Re-check after acquiring monitor to prevent stampedes
+            Long recheckLastRun = lastProcessedUserTime.get(cleanUser);
+            if (recheckLastRun != null && (System.currentTimeMillis() - recheckLastRun) < 60000L) {
+                return;
+            }
+            lastProcessedUserTime.put(cleanUser, System.currentTimeMillis());
+
             Folder inbox = null;
             Folder spamFolder = null;
             try {
