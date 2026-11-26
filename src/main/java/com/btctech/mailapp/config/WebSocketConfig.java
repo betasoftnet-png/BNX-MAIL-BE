@@ -128,12 +128,17 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                                     log.info("✓ WebSocket STOMP authenticated for: {}", email);
                                 } else {
                                     log.warn("✗ WebSocket STOMP rejected: Invalid or expired token for {}", email);
+                                    throw new org.springframework.messaging.simp.stomp.StompConversionException("Unauthorized: Invalid or expired token");
                                 }
+                            } catch (org.springframework.messaging.simp.stomp.StompConversionException sce) {
+                                throw sce;
                             } catch (Exception e) {
                                 log.warn("✗ WebSocket STOMP token validation error: {}", e.getMessage());
+                                throw new org.springframework.messaging.simp.stomp.StompConversionException("Unauthorized: " + e.getMessage());
                             }
                         } else {
                             log.warn("✗ WebSocket STOMP CONNECT without Authorization header (session={})", accessor.getSessionId());
+                            throw new org.springframework.messaging.simp.stomp.StompConversionException("Unauthorized: Missing Authorization header");
                         }
                     } else if (StompCommand.SUBSCRIBE.equals(command)) {
                         log.debug("WebSocket client subscribing to: {} (session={})", accessor.getDestination(), accessor.getSessionId());

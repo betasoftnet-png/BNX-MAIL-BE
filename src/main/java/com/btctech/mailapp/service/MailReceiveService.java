@@ -77,6 +77,46 @@ public class MailReceiveService {
     private final ReadReceiptService readReceiptService;
     private final Map<String, Long> lastProcessedUserTime = new java.util.concurrent.ConcurrentHashMap<>();
 
+    private final java.util.concurrent.ExecutorService spamProcessingExecutor =
+            java.util.concurrent.Executors.newFixedThreadPool(2, new java.util.concurrent.ThreadFactory() {
+                private final java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "spam-processor-" + count.getAndIncrement());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+
+    /**
+     * Trigger asynchronous spam and inbox classification without blocking synchronous HTTP requests.
+     */
+    private void triggerAsyncSpamProcessing(String email, String password) {
+        if (email == null || email.trim().isEmpty() || password == null || password.trim().isEmpty()) {
+            return;
+        }
+        String cleanUser = email.trim().toLowerCase();
+        long nowMs = System.currentTimeMillis();
+        Long lastRun = lastProcessedUserTime.get(cleanUser);
+        // Throttle spam processing to at most once every 60 seconds per user
+        if (lastRun != null && (nowMs - lastRun) < 60000L) {
+            return;
+        }
+
+        spamProcessingExecutor.submit(() -> {
+            Store bgStore = null;
+            try {
+                bgStore = connect(email, password);
+                processIncomingAndSpamEmails(bgStore, email);
+            } catch (Exception ex) {
+                log.debug("Async spam processing note for {}: {}", email, ex.getMessage());
+            } finally {
+                if (bgStore != null) {
+                    try { bgStore.close(); } catch (Exception ignored) {}
+                }
+            }
+        });
+    }
 
     /**
      * Common method to fetch emails from a specific folder
@@ -90,9 +130,9 @@ public class MailReceiveService {
         try {
             store = connect(email, password);
 
-            // Ensure incoming emails are automatically analyzed, classified, and routed to the correct folder
+            // Trigger non-blocking asynchronous analysis & spam classification in background
             if ("INBOX".equalsIgnoreCase(folderName) || "Spam".equalsIgnoreCase(folderName)) {
-                processIncomingAndSpamEmails(store, email);
+                triggerAsyncSpamProcessing(email, password);
             }
 
             String actualFolderName = folderName;
@@ -190,6 +230,22 @@ public class MailReceiveService {
             }
 
             Message[] messages = folder.getMessages(startIndex, endIndex);
+
+            // Pre-fetch all message headers, envelopes, flags, sizes, and UIDs in ONE bulk IMAP round-trip
+            try {
+                FetchProfile fp = new FetchProfile();
+                fp.add(FetchProfile.Item.ENVELOPE);
+                fp.add(FetchProfile.Item.FLAGS);
+                fp.add(FetchProfile.Item.CONTENT_INFO);
+                if (folder instanceof UIDFolder) {
+                    fp.add(UIDFolder.FetchProfileItem.UID);
+                }
+                fp.add("Message-ID");
+                fp.add("Date");
+                folder.fetch(messages, fp);
+            } catch (Exception fetchEx) {
+                log.debug("FetchProfile prefetch note for {}: {}", folderName, fetchEx.getMessage());
+            }
 
             Map<String, LocalDateTime> blockedMap = new HashMap<>();
             if ("INBOX".equalsIgnoreCase(folderName)) {
@@ -1505,8 +1561,8 @@ public class MailReceiveService {
         Store store = null;
         Folder inbox = null;
         try {
+            triggerAsyncSpamProcessing(email, password);
             store = connect(email, password);
-            processIncomingAndSpamEmails(store, email);
 
             inbox = store.getFolder("INBOX");
             if (!inbox.exists()) {
@@ -1544,8 +1600,8 @@ public class MailReceiveService {
         Folder folder = null;
 
         try {
+            triggerAsyncSpamProcessing(email, password);
             store = connect(email, password);
-            processIncomingAndSpamEmails(store, email);
             folder = store.getFolder("INBOX");
             
             if (!folder.exists()) {
@@ -1591,9 +1647,28 @@ public class MailReceiveService {
 
             List<EmailDTO> emails = new ArrayList<>();
             if (endIndex > 0) {
+                List<Message> pageMessages = new ArrayList<>();
                 for (int i = endIndex - 1; i >= startIndex; i--) {
+                    pageMessages.add(filteredMessages.get(i));
+                }
+                if (!pageMessages.isEmpty()) {
                     try {
-                        Message msg = filteredMessages.get(i);
+                        FetchProfile fp = new FetchProfile();
+                        fp.add(FetchProfile.Item.ENVELOPE);
+                        fp.add(FetchProfile.Item.FLAGS);
+                        fp.add(FetchProfile.Item.CONTENT_INFO);
+                        if (folder instanceof UIDFolder) {
+                            fp.add(UIDFolder.FetchProfileItem.UID);
+                        }
+                        fp.add("Message-ID");
+                        fp.add("Date");
+                        folder.fetch(pageMessages.toArray(new Message[0]), fp);
+                    } catch (Exception fetchEx) {
+                        log.debug("FetchProfile prefetch unread note: {}", fetchEx.getMessage());
+                    }
+                }
+                for (Message msg : pageMessages) {
+                    try {
                         EmailDTO dto = convertToDTO(msg, uidFolder, email);
                         dto.setRead(false);
                         emails.add(dto);
