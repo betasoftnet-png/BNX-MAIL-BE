@@ -32,6 +32,7 @@ public class UserController {
     private final JwtUtil jwtUtil;
     private final com.btctech.mailapp.repository.BusinessProfileRepository businessProfileRepository;
     private final com.btctech.mailapp.service.RecipientSuggestionService recipientSuggestionService;
+    private final com.btctech.mailapp.service.AuthService authService;
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getCurrentUser(
             @RequestHeader("Authorization") String authHeader) {
@@ -307,18 +308,51 @@ public class UserController {
     }
 
     @GetMapping("/recovery")
-    public ResponseEntity<ApiResponse<Map<String, String>>> getRecoveryInfo(
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getRecoveryInfo(
             @RequestHeader("Authorization") String authHeader) {
         
         String token = authHeader.replace("Bearer ", "");
         String identifier = jwtUtil.extractEmail(token);
         User user = userService.getUserByEmailOrUsername(identifier);
         
-        Map<String, String> data = new HashMap<>();
+        boolean isEmailVerified = Boolean.TRUE.equals(user.getRecoveryEmailVerified()) || 
+                (user.getRecoveryEmailVerified() == null && user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty());
+        boolean isPhoneVerified = Boolean.TRUE.equals(user.getRecoveryPhoneVerified()) || 
+                (user.getRecoveryPhoneVerified() == null && user.getPhoneNumber() != null && !user.getPhoneNumber().trim().isEmpty());
+
+        Map<String, Object> data = new HashMap<>();
         data.put("recoveryEmail", user.getRecoveryEmail());
         data.put("phoneNumber", user.getPhoneNumber());
+        data.put("isRecoveryEmailVerified", isEmailVerified);
+        data.put("isRecoveryPhoneVerified", isPhoneVerified);
         
         return ResponseEntity.ok(ApiResponse.success(data, "Recovery info retrieved successfully"));
+    }
+
+    @PostMapping("/recovery/send-otp")
+    public ResponseEntity<ApiResponse<Void>> sendRecoveryOtp(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestBody com.btctech.mailapp.dto.SendRecoveryOtpRequest request) {
+        
+        String token = authHeader.replace("Bearer ", "");
+        String identifier = jwtUtil.extractEmail(token);
+        User user = userService.getUserByEmailOrUsername(identifier);
+        
+        authService.sendRecoveryContactOtp(user, request.getTarget(), request.getContact());
+        return ResponseEntity.ok(ApiResponse.success(null, "Verification code sent successfully"));
+    }
+
+    @PostMapping("/recovery/verify-otp")
+    public ResponseEntity<ApiResponse<Void>> verifyRecoveryOtp(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestBody com.btctech.mailapp.dto.VerifyRecoveryOtpRequest request) {
+        
+        String token = authHeader.replace("Bearer ", "");
+        String identifier = jwtUtil.extractEmail(token);
+        User user = userService.getUserByEmailOrUsername(identifier);
+        
+        authService.verifyRecoveryContactOtp(user, request.getTarget(), request.getContact(), request.getOtp());
+        return ResponseEntity.ok(ApiResponse.success(null, "Recovery contact verified successfully"));
     }
 
     @PatchMapping("/recovery")

@@ -20,9 +20,15 @@ public class User {
     
     @Column(name = "recovery_email", length = 255)
     private String recoveryEmail;
+
+    @Column(name = "recovery_email_verified")
+    private Boolean recoveryEmailVerified = false;
     
     @Column(name = "phone_number", length = 50)
     private String phoneNumber;
+
+    @Column(name = "recovery_phone_verified")
+    private Boolean recoveryPhoneVerified = false;
     
     @Column(nullable = false)
     private String password;

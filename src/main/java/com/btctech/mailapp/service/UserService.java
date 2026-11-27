@@ -163,16 +163,47 @@ public class UserService {
      */
     @Transactional
     public void updateRecoveryInfo(User user, String recoveryEmail, String phoneNumber) {
-        if (recoveryEmail != null) user.setRecoveryEmail(recoveryEmail);
-        if (phoneNumber != null) {
-            user.setPhoneNumber(phoneNumber);
-            // Sync with UserSettings
-            UserSettings settings = getSettings(user);
-            settings.setPhoneNumber(phoneNumber);
-            userSettingsRepository.save(settings);
+        if (recoveryEmail != null && !recoveryEmail.trim().isEmpty()) {
+            String cleanEmail = recoveryEmail.trim().toLowerCase();
+            if (!cleanEmail.equalsIgnoreCase(user.getRecoveryEmail())) {
+                user.setRecoveryEmail(cleanEmail);
+                user.setRecoveryEmailVerified(false);
+            }
+        }
+        if (phoneNumber != null && !phoneNumber.trim().isEmpty()) {
+            String cleanPhone = phoneNumber.replaceAll("[^0-9]", "");
+            cleanPhone = cleanPhone.length() > 10 ? cleanPhone.substring(cleanPhone.length() - 10) : cleanPhone;
+            if (!cleanPhone.equals(user.getPhoneNumber())) {
+                user.setPhoneNumber(cleanPhone);
+                user.setRecoveryPhoneVerified(false);
+                UserSettings settings = getSettings(user);
+                settings.setPhoneNumber(cleanPhone);
+                userSettingsRepository.save(settings);
+            }
         }
         userRepository.save(user);
         log.info("✓ Recovery info updated for user: {}", user.getUsername());
+    }
+
+    @Transactional
+    public void markRecoveryEmailVerified(User user, String verifiedEmail) {
+        user.setRecoveryEmail(verifiedEmail.trim().toLowerCase());
+        user.setRecoveryEmailVerified(true);
+        userRepository.save(user);
+        log.info("✓ Recovery email verified and saved for user: {}", user.getUsername());
+    }
+
+    @Transactional
+    public void markRecoveryPhoneVerified(User user, String verifiedPhone) {
+        String cleanPhone = verifiedPhone.replaceAll("[^0-9]", "");
+        cleanPhone = cleanPhone.length() > 10 ? cleanPhone.substring(cleanPhone.length() - 10) : cleanPhone;
+        user.setPhoneNumber(cleanPhone);
+        user.setRecoveryPhoneVerified(true);
+        UserSettings settings = getSettings(user);
+        settings.setPhoneNumber(cleanPhone);
+        userSettingsRepository.save(settings);
+        userRepository.save(user);
+        log.info("✓ Recovery phone verified and saved for user: {}", user.getUsername());
     }
 
     /**

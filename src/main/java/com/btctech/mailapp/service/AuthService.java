@@ -82,6 +82,31 @@ public class AuthService {
 
     private final java.util.Map<String, ParentOtpData> parentOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, MobileOtpData> mobileOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, RecoveryContactOtpData> recoveryContactOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static class RecoveryContactOtpData {
+        private final Long userId;
+        private final String target;
+        private final String contact;
+        private final String otp;
+        private final java.time.LocalDateTime expiryTime;
+        private final java.time.Instant createdAt;
+        private int attempts;
+
+        public RecoveryContactOtpData(Long userId, String target, String contact, String otp, int minutesToLive) {
+            this.userId = userId;
+            this.target = target;
+            this.contact = contact;
+            this.otp = otp;
+            this.expiryTime = java.time.LocalDateTime.now().plusMinutes(minutesToLive);
+            this.createdAt = java.time.Instant.now();
+            this.attempts = 0;
+        }
+
+        public boolean isExpired() {
+            return java.time.LocalDateTime.now().isAfter(expiryTime);
+        }
+    }
 
     private static class ParentOtpData {
         private final String otp;
@@ -155,30 +180,30 @@ public class AuthService {
         return true;
     }
 
-    public void sendMobileOtp(String mobileNumber) {
-        java.security.SecureRandom random = new java.security.SecureRandom();
-        int otpValue = 100000 + random.nextInt(900000);
-        String otp = String.valueOf(otpValue);
-
-        mobileOtpCache.put(mobileNumber.trim(), new MobileOtpData(otp, 15));
+    private void sendSmsViaMsg91(String cleanMobile, String otp) {
+        if (smsAuthKey == null || smsAuthKey.trim().isEmpty()) {
+            log.error("MSG91 Delivery blocked: 'sms.provider.authkey' is not configured.");
+            throw new MailException("SMS service authentication is not configured. Please contact support or use Email recovery.");
+        }
+        String templateIdToUse = (smsTemplateId != null && !smsTemplateId.trim().isEmpty()) 
+                ? smsTemplateId.trim() 
+                : smsForgotPasswordTemplateId;
+        if (templateIdToUse == null || templateIdToUse.trim().isEmpty()) {
+            log.error("MSG91 Delivery blocked: No SMS template ID is configured.");
+            throw new MailException("SMS template is not configured. Please contact support or use Email recovery.");
+        }
 
         try {
             RestTemplate restTemplate = new RestTemplate();
-            
-            // Clean mobile number (remove '+', spaces, dashes, etc. - keep only digits)
-            String cleanMobile = mobileNumber.replaceAll("[^0-9]", "");
-            
             String url = "https://control.msg91.com/api/v5/flow";
 
             HttpHeaders headers = new HttpHeaders();
-            headers.set("authkey", smsAuthKey);
+            headers.set("authkey", smsAuthKey.trim());
             headers.set("Accept", "application/json");
             headers.set("Content-Type", "application/json");
 
-            // Format JSON body according to MSG91 v5 flow API
-            // NOTE: If your MSG91 template uses a different variable name than VAR1 (e.g. OTP), change it here!
             String requestBody = "{\n" +
-                    "  \"template_id\": \"" + smsTemplateId + "\",\n" +
+                    "  \"template_id\": \"" + templateIdToUse + "\",\n" +
                     "  \"short_url\": \"0\",\n" +
                     "  \"recipients\": [\n" +
                     "    {\n" +
@@ -194,24 +219,22 @@ public class AuthService {
                     "}";
 
             HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
-
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
-            
             String responseBody = response.getBody();
-            log.info("MSG91 Response: {}", responseBody);
-            
+
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             if (responseBody != null) {
                 com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
                 if (root.has("type") && "error".equalsIgnoreCase(root.get("type").asText())) {
                     String errorMessage = root.has("message") ? root.get("message").asText() : "Unknown MSG91 Error";
-                    throw new MailException(errorMessage);
+                    log.error("MSG91 rejected OTP SMS delivery: {}", errorMessage);
+                    throw new MailException("Failed to send OTP SMS: " + errorMessage);
                 }
             }
-
-            log.info("✓ Mobile OTP generated and sent to: {}", mobileNumber);
+        } catch (MailException me) {
+            throw me;
         } catch (org.springframework.web.client.HttpStatusCodeException e) {
-            log.error("MSG91 HTTP Error: {}", e.getResponseBodyAsString());
+            log.error("MSG91 HTTP Error: status {}", e.getStatusCode());
             try {
                 com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(e.getResponseBodyAsString());
                 String errorMessage = root.has("message") ? root.get("message").asText() : "SMS Provider Error";
@@ -219,12 +242,138 @@ public class AuthService {
             } catch (Exception ex) {
                 throw new MailException("Failed to send SMS: " + e.getStatusText());
             }
-        } catch (MailException e) {
-            // Rethrow our mapped exceptions so they reach the controller
-            throw e;
         } catch (Exception e) {
-            log.error("Failed to send MSG91 OTP to {}: {}", mobileNumber, e.getMessage());
+            log.error("Failed to send MSG91 OTP to masked mobile: {}", e.getMessage());
             throw new MailException("Failed to send SMS verification code. Please try again.");
+        }
+    }
+
+    public void sendMobileOtp(String mobileNumber) {
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        int otpValue = 100000 + random.nextInt(900000);
+        String otp = String.valueOf(otpValue);
+
+        String cleanMobile = mobileNumber.replaceAll("[^0-9]", "");
+        sendSmsViaMsg91(cleanMobile, otp);
+        mobileOtpCache.put(mobileNumber.trim(), new MobileOtpData(otp, 15));
+        log.info("✓ Mobile OTP generated and sent to: {}", maskPhone(mobileNumber));
+    }
+
+    public void sendRecoveryContactOtp(User user, String target, String contact) {
+        if (user == null) {
+            throw new com.btctech.mailapp.exception.MailSecurityException("Authentication required");
+        }
+        if (target == null || (!"email".equalsIgnoreCase(target) && !"phone".equalsIgnoreCase(target))) {
+            throw new MailException("Invalid target. Must be 'email' or 'phone'");
+        }
+        if (contact == null || contact.trim().isEmpty()) {
+            throw new MailException("Recovery contact is required");
+        }
+
+        String normTarget = target.trim().toLowerCase();
+        String cleanContact = contact.trim();
+
+        if ("email".equals(normTarget)) {
+            if (!cleanContact.matches("^[A-Za-z0-9+_.-]+@(.+)$")) {
+                throw new MailException("Please enter a valid recovery email address");
+            }
+            cleanContact = cleanContact.toLowerCase();
+        } else {
+            String digitsOnly = cleanContact.replaceAll("[^0-9]", "");
+            if (digitsOnly.length() < 10) {
+                throw new MailException("Recovery phone number must be at least 10 digits");
+            }
+            cleanContact = digitsOnly.length() > 10 ? digitsOnly.substring(digitsOnly.length() - 10) : digitsOnly;
+        }
+
+        String cacheKey = user.getId() + ":" + normTarget;
+        RecoveryContactOtpData existing = recoveryContactOtpCache.get(cacheKey);
+        if (existing != null && !existing.isExpired()) {
+            long secondsPassed = java.time.Duration.between(existing.createdAt, java.time.Instant.now()).getSeconds();
+            if (secondsPassed < 60) {
+                long waitTime = 60 - secondsPassed;
+                throw new MailException("Please wait " + waitTime + " seconds before requesting a new code.");
+            }
+        }
+
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        int otpValue = 100000 + random.nextInt(900000);
+        String otp = String.valueOf(otpValue);
+
+        if ("email".equals(normTarget)) {
+            try {
+                SimpleMailMessage message = new SimpleMailMessage();
+                String fromAddress = (mailFrom != null && !mailFrom.trim().isEmpty()) ? mailFrom.trim() : "noreply@bnxmail.com";
+                message.setFrom(fromAddress);
+                message.setTo(cleanContact);
+                message.setSubject("BNX Mail Recovery Email Verification");
+                message.setText("Your verification code for BNX Mail Recovery Email is: " + otp + "\n\nUse this code to verify your recovery contact details in BNX Mail settings.\nThis code will expire in 15 minutes.\n\nIf you did not request this verification, please secure your account immediately.");
+                javaMailSender.send(message);
+                log.info("Sent recovery verification OTP email to masked recipient: {}", maskEmail(cleanContact));
+            } catch (Exception e) {
+                log.error("Failed to send recovery OTP email: {}", e.getMessage());
+                throw new MailException("Failed to send verification email. Please check the email address or try again later.");
+            }
+        } else {
+            sendSmsViaMsg91(cleanContact, otp);
+            log.info("Dispatched recovery verification OTP SMS to: {}", maskPhone(cleanContact));
+        }
+
+        // Cache after successful dispatch so cooldown and verification only apply to delivered OTPs
+        recoveryContactOtpCache.put(cacheKey, new RecoveryContactOtpData(user.getId(), normTarget, cleanContact, otp, 15));
+    }
+
+    public void verifyRecoveryContactOtp(User user, String target, String contact, String otp) {
+        if (user == null) {
+            throw new com.btctech.mailapp.exception.MailSecurityException("Authentication required");
+        }
+        if (target == null || contact == null || otp == null) {
+            throw new MailException("Target, contact, and OTP code are required");
+        }
+
+        String normTarget = target.trim().toLowerCase();
+        String cleanContact = contact.trim();
+        if ("email".equals(normTarget)) {
+            cleanContact = cleanContact.toLowerCase();
+        } else {
+            String digitsOnly = cleanContact.replaceAll("[^0-9]", "");
+            cleanContact = digitsOnly.length() > 10 ? digitsOnly.substring(digitsOnly.length() - 10) : digitsOnly;
+        }
+
+        String cacheKey = user.getId() + ":" + normTarget;
+        RecoveryContactOtpData data = recoveryContactOtpCache.get(cacheKey);
+
+        if (data == null) {
+            throw new MailException("No active verification code found. Please request a new OTP.");
+        }
+
+        if (data.isExpired()) {
+            recoveryContactOtpCache.remove(cacheKey);
+            throw new MailException("Verification code has expired. Please request a new OTP.");
+        }
+
+        if (!data.contact.equalsIgnoreCase(cleanContact)) {
+            throw new MailException("The contact does not match the recipient the OTP was sent to.");
+        }
+
+        if (!data.otp.equals(otp.trim())) {
+            data.attempts++;
+            if (data.attempts >= 5) {
+                recoveryContactOtpCache.remove(cacheKey);
+                throw new MailException("Too many incorrect attempts. Please request a new verification code.");
+            }
+            int remaining = 5 - data.attempts;
+            throw new MailException("Invalid verification code. " + remaining + " attempts remaining.");
+        }
+
+        // OTP is correct! Clear from cache (single use)
+        recoveryContactOtpCache.remove(cacheKey);
+
+        // Update User profile
+        if ("email".equals(normTarget)) {
+            userService.markRecoveryEmailVerified(user, cleanContact);
+        } else {
+            userService.markRecoveryPhoneVerified(user, cleanContact);
         }
     }
 
