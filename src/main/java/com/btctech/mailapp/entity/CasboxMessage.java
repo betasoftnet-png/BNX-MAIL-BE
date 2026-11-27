@@ -6,7 +6,13 @@ import java.time.LocalDateTime;
 
 @Data
 @Entity
-@Table(name = "casbox_messages")
+@Table(name = "casbox_messages", indexes = {
+    @Index(name = "idx_casbox_sender", columnList = "sender_email"),
+    @Index(name = "idx_casbox_receiver", columnList = "receiver_email"),
+    @Index(name = "idx_casbox_timestamp", columnList = "timestamp"),
+    @Index(name = "idx_casbox_sender_receiver", columnList = "sender_email, receiver_email"),
+    @Index(name = "idx_casbox_receiver_status", columnList = "receiver_email, status")
+})
 public class CasboxMessage {
     
     @Id

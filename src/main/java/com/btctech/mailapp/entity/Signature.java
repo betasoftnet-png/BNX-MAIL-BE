@@ -13,7 +13,9 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Table(name = "signatures")
+@Table(name = "signatures", indexes = {
+    @Index(name = "idx_signatures_user_id", columnList = "user_id")
+})
 public class Signature {
 
     @Id
