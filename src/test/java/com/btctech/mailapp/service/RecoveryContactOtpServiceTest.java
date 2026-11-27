@@ -126,6 +126,25 @@ class RecoveryContactOtpServiceTest {
         MailException ex = assertThrows(MailException.class, () ->
                 authService.sendRecoveryContactOtp(testUser, "phone", "12345")
         );
-        assertTrue(ex.getMessage().contains("at least 10 digits"));
+        assertTrue(ex.getMessage().contains("10 digits"));
+    }
+
+    @Test
+    @DisplayName("Support target aliases (mobile, sms, etc.) and DTO resolution")
+    void testTargetAliasesAndDto() {
+        com.btctech.mailapp.dto.SendRecoveryOtpRequest req1 = new com.btctech.mailapp.dto.SendRecoveryOtpRequest();
+        req1.setTarget("mobile");
+        req1.setContact("9876543210");
+        assertEquals("phone", req1.resolveTarget());
+
+        com.btctech.mailapp.dto.SendRecoveryOtpRequest req2 = new com.btctech.mailapp.dto.SendRecoveryOtpRequest();
+        req2.setContact("test@example.com");
+        assertEquals("email", req2.resolveTarget());
+
+        com.btctech.mailapp.dto.VerifyRecoveryOtpRequest req3 = new com.btctech.mailapp.dto.VerifyRecoveryOtpRequest();
+        req3.setContact("919876543210");
+        req3.setOtp("123456");
+        assertEquals("phone", req3.resolveTarget());
+        assertEquals("123456", req3.resolveOtp());
     }
 }

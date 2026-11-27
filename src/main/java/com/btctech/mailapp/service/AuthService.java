@@ -202,9 +202,14 @@ public class AuthService {
             headers.set("Accept", "application/json");
             headers.set("Content-Type", "application/json");
 
+            String senderField = (smsSenderId != null && !smsSenderId.trim().isEmpty())
+                    ? "  \"sender\": \"" + smsSenderId.trim() + "\",\n"
+                    : "";
+
             String requestBody = "{\n" +
                     "  \"template_id\": \"" + templateIdToUse + "\",\n" +
                     "  \"short_url\": \"0\",\n" +
+                    senderField +
                     "  \"recipients\": [\n" +
                     "    {\n" +
                     "      \"mobiles\": \"" + cleanMobile + "\",\n" +
@@ -263,14 +268,23 @@ public class AuthService {
         if (user == null) {
             throw new com.btctech.mailapp.exception.MailSecurityException("Authentication required");
         }
-        if (target == null || (!"email".equalsIgnoreCase(target) && !"phone".equalsIgnoreCase(target))) {
-            throw new MailException("Invalid target. Must be 'email' or 'phone'");
-        }
         if (contact == null || contact.trim().isEmpty()) {
-            throw new MailException("Recovery contact is required");
+            throw new MailException("Recovery contact address or mobile number is required");
         }
 
-        String normTarget = target.trim().toLowerCase();
+        String normTarget = target != null ? target.trim().toLowerCase() : null;
+        if (normTarget == null || (!"email".equals(normTarget) && !"phone".equals(normTarget) && !"mobile".equals(normTarget) && !"sms".equals(normTarget))) {
+            if (contact.contains("@")) {
+                normTarget = "email";
+            } else if (contact.replaceAll("[^0-9]", "").length() >= 10) {
+                normTarget = "phone";
+            } else {
+                throw new MailException("Invalid verification target. Must be 'email' or 'phone'");
+            }
+        } else if ("mobile".equals(normTarget) || "sms".equals(normTarget)) {
+            normTarget = "phone";
+        }
+
         String cleanContact = contact.trim();
 
         if ("email".equals(normTarget)) {
@@ -281,7 +295,7 @@ public class AuthService {
         } else {
             String digitsOnly = cleanContact.replaceAll("[^0-9]", "");
             if (digitsOnly.length() < 10) {
-                throw new MailException("Recovery phone number must be at least 10 digits");
+                throw new MailException("Recovery phone number must be exactly 10 digits");
             }
             cleanContact = digitsOnly.length() > 10 ? digitsOnly.substring(digitsOnly.length() - 10) : digitsOnly;
         }
@@ -327,11 +341,26 @@ public class AuthService {
         if (user == null) {
             throw new com.btctech.mailapp.exception.MailSecurityException("Authentication required");
         }
-        if (target == null || contact == null || otp == null) {
-            throw new MailException("Target, contact, and OTP code are required");
+        if (contact == null || contact.trim().isEmpty()) {
+            throw new MailException("Recovery contact address or mobile number is required");
+        }
+        if (otp == null || otp.trim().isEmpty()) {
+            throw new MailException("OTP verification code is required");
         }
 
-        String normTarget = target.trim().toLowerCase();
+        String normTarget = target != null ? target.trim().toLowerCase() : null;
+        if (normTarget == null || (!"email".equals(normTarget) && !"phone".equals(normTarget) && !"mobile".equals(normTarget) && !"sms".equals(normTarget))) {
+            if (contact.contains("@")) {
+                normTarget = "email";
+            } else if (contact.replaceAll("[^0-9]", "").length() >= 10) {
+                normTarget = "phone";
+            } else {
+                throw new MailException("Invalid verification target. Must be 'email' or 'phone'");
+            }
+        } else if ("mobile".equals(normTarget) || "sms".equals(normTarget)) {
+            normTarget = "phone";
+        }
+
         String cleanContact = contact.trim();
         if ("email".equals(normTarget)) {
             cleanContact = cleanContact.toLowerCase();

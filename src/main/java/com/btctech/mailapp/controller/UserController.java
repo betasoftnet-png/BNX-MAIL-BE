@@ -307,13 +307,54 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(result, "Activity logs retrieved successfully"));
     }
 
+    private User resolveAuthenticatedUser(HttpServletRequest httpRequest, String authHeader) {
+        String token = null;
+        if (authHeader != null && !authHeader.trim().isEmpty()) {
+            token = authHeader.trim();
+        } else if (httpRequest != null) {
+            String header = httpRequest.getHeader("Authorization");
+            if (header == null) header = httpRequest.getHeader("authorization");
+            if (header != null && !header.trim().isEmpty()) {
+                token = header.trim();
+            }
+        }
+
+        String identifier = null;
+        if (token != null) {
+            if (token.toLowerCase().startsWith("bearer ")) {
+                token = token.substring(7).trim();
+            }
+            try {
+                identifier = jwtUtil.extractEmail(token);
+            } catch (Exception e) {
+                log.warn("Failed to extract subject from token: {}", e.getMessage());
+            }
+        }
+
+        if (identifier == null || identifier.trim().isEmpty()) {
+            var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+            if (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getPrincipal())) {
+                identifier = auth.getName();
+            }
+        }
+
+        if (identifier == null || identifier.trim().isEmpty()) {
+            throw new com.btctech.mailapp.exception.MailSecurityException("Authentication required. Please log in again.");
+        }
+
+        User user = userService.getUserByEmailOrUsername(identifier);
+        if (user == null) {
+            throw new com.btctech.mailapp.exception.MailSecurityException("User account not found");
+        }
+        return user;
+    }
+
     @GetMapping("/recovery")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getRecoveryInfo(
-            @RequestHeader("Authorization") String authHeader) {
+            HttpServletRequest httpRequest,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
         
-        String token = authHeader.replace("Bearer ", "");
-        String identifier = jwtUtil.extractEmail(token);
-        User user = userService.getUserByEmailOrUsername(identifier);
+        User user = resolveAuthenticatedUser(httpRequest, authHeader);
         
         boolean isEmailVerified = Boolean.TRUE.equals(user.getRecoveryEmailVerified()) || 
                 (user.getRecoveryEmailVerified() == null && user.getRecoveryEmail() != null && !user.getRecoveryEmail().trim().isEmpty());
@@ -331,38 +372,59 @@ public class UserController {
 
     @PostMapping("/recovery/send-otp")
     public ResponseEntity<ApiResponse<Void>> sendRecoveryOtp(
-            @RequestHeader("Authorization") String authHeader,
-            @RequestBody com.btctech.mailapp.dto.SendRecoveryOtpRequest request) {
+            HttpServletRequest httpRequest,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody(required = false) com.btctech.mailapp.dto.SendRecoveryOtpRequest request) {
         
-        String token = authHeader.replace("Bearer ", "");
-        String identifier = jwtUtil.extractEmail(token);
-        User user = userService.getUserByEmailOrUsername(identifier);
-        
-        authService.sendRecoveryContactOtp(user, request.getTarget(), request.getContact());
+        if (request == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Request body is required"));
+        }
+
+        User user = resolveAuthenticatedUser(httpRequest, authHeader);
+        String target = request.resolveTarget();
+        String contact = request.resolveContact();
+
+        if (contact == null || contact.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Recovery email or mobile number is required"));
+        }
+
+        authService.sendRecoveryContactOtp(user, target, contact);
         return ResponseEntity.ok(ApiResponse.success(null, "Verification code sent successfully"));
     }
 
     @PostMapping("/recovery/verify-otp")
     public ResponseEntity<ApiResponse<Void>> verifyRecoveryOtp(
-            @RequestHeader("Authorization") String authHeader,
-            @RequestBody com.btctech.mailapp.dto.VerifyRecoveryOtpRequest request) {
+            HttpServletRequest httpRequest,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody(required = false) com.btctech.mailapp.dto.VerifyRecoveryOtpRequest request) {
         
-        String token = authHeader.replace("Bearer ", "");
-        String identifier = jwtUtil.extractEmail(token);
-        User user = userService.getUserByEmailOrUsername(identifier);
-        
-        authService.verifyRecoveryContactOtp(user, request.getTarget(), request.getContact(), request.getOtp());
+        if (request == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Request body is required"));
+        }
+
+        User user = resolveAuthenticatedUser(httpRequest, authHeader);
+        String target = request.resolveTarget();
+        String contact = request.resolveContact();
+        String otp = request.resolveOtp();
+
+        if (contact == null || contact.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Recovery email or mobile number is required"));
+        }
+        if (otp == null || otp.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("OTP verification code is required"));
+        }
+
+        authService.verifyRecoveryContactOtp(user, target, contact, otp);
         return ResponseEntity.ok(ApiResponse.success(null, "Recovery contact verified successfully"));
     }
 
     @PatchMapping("/recovery")
     public ResponseEntity<ApiResponse<Void>> updateRecoveryInfo(
-            @RequestHeader("Authorization") String authHeader,
+            HttpServletRequest httpRequest,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody com.btctech.mailapp.dto.RecoveryInfoDTO recoveryInfo) {
         
-        String token = authHeader.replace("Bearer ", "");
-        String identifier = jwtUtil.extractEmail(token);
-        User user = userService.getUserByEmailOrUsername(identifier);
+        User user = resolveAuthenticatedUser(httpRequest, authHeader);
         
         userService.updateRecoveryInfo(user, recoveryInfo.getRecoveryEmail(), recoveryInfo.getPhoneNumber());
         
