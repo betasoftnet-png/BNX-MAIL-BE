@@ -276,36 +276,34 @@ public class ProfilePictureController {
             }
 
             if (profilePictureFilename != null) {
-                Path filePath = Paths.get(UPLOAD_DIR).resolve(profilePictureFilename);
-                File file = filePath.toFile();
+                try {
+                    Path filePath = Paths.get(UPLOAD_DIR).resolve(profilePictureFilename);
+                    File file = filePath.toFile();
 
-                if (file.exists() && file.isFile()) {
-                    Resource resource = new UrlResource(filePath.toUri());
-                    String contentType = Files.probeContentType(filePath);
-                    if (contentType == null) {
-                        contentType = "image/jpeg";
+                    if (file.exists() && file.isFile() && file.canRead() && file.length() > 0) {
+                        byte[] fileBytes = Files.readAllBytes(filePath);
+                        String contentType = Files.probeContentType(filePath);
+                        if (contentType == null) {
+                            contentType = "image/jpeg";
+                        }
+
+                        return ResponseEntity.ok()
+                                .contentType(MediaType.parseMediaType(contentType))
+                                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + file.getName() + "\"")
+                                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
+                                .body(fileBytes);
                     }
-
-                    return ResponseEntity.ok()
-                            .contentType(MediaType.parseMediaType(contentType))
-                            .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + file.getName() + "\"")
-                            .header(HttpHeaders.CACHE_CONTROL, "public, max-age=3600")
-                            .body(resource);
+                } catch (Exception fileEx) {
+                    log.warn("Could not read profile picture file for {}: {}", usernameOrEmail, fileEx.getMessage());
                 }
             }
 
-            // If no profile picture or file does not exist:
-            if (fallback) {
-                return serveDefaultAvatar(displayName);
-            }
-            return ResponseEntity.notFound().build();
+            // Always serve default SVG avatar when no picture file exists or file read fails
+            return serveDefaultAvatar(displayName);
 
         } catch (Exception e) {
             log.error("Error retrieving profile picture for {}: {}", usernameOrEmail, e.getMessage());
-            if (fallback) {
-                return serveDefaultAvatar(usernameOrEmail);
-            }
-            return ResponseEntity.notFound().build();
+            return serveDefaultAvatar(usernameOrEmail);
         }
     }
 
