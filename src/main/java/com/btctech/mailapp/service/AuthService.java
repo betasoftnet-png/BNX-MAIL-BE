@@ -68,16 +68,16 @@ public class AuthService {
         return false;
     }
 
-    @Value("${sms.provider.authkey:${SMS_PROVIDER_AUTHKEY:${sms.auth.key:}}}")
+    @Value("${sms.provider.authkey:${SMS_PROVIDER_AUTHKEY:${SMS_AUTH_KEY:${MSG91_AUTH_KEY:${MSG91_AUTHKEY:${MSG91_KEY:${sms.auth.key:${sms_auth_key:}}}}}}}}")
     private String smsAuthKey;
 
-    @Value("${sms.provider.templateId:${SMS_PROVIDER_TEMPLATEID:${sms.template.id:}}}")
+    @Value("${sms.provider.templateId:${SMS_PROVIDER_TEMPLATEID:${SMS_TEMPLATE_ID:${MSG91_TEMPLATE_ID:${MSG91_FLOW_TEMPLATE_ID:${sms.template.id:${sms_template_id:}}}}}}}")
     private String smsTemplateId;
 
-    @Value("${sms.provider.forgotPasswordTemplateId:${SMS_PROVIDER_FORGOTPASSWORDTEMPLATEID:${sms.forgot.password.template.id:}}}")
+    @Value("${sms.provider.forgotPasswordTemplateId:${SMS_PROVIDER_FORGOTPASSWORDTEMPLATEID:${SMS_FORGOT_PASSWORD_TEMPLATE_ID:${MSG91_FORGOT_PASSWORD_TEMPLATE_ID:${sms.forgot.password.template.id:${sms_forgot_password_template_id:}}}}}}}")
     private String smsForgotPasswordTemplateId;
 
-    @Value("${sms.provider.senderId:${SMS_PROVIDER_SENDERID:${sms.sender.id:}}}")
+    @Value("${sms.provider.senderId:${SMS_PROVIDER_SENDERID:${SMS_SENDER_ID:${MSG91_SENDER_ID:${sms.sender.id:${sms_sender_id:BNXML}}}}}}")
     private String smsSenderId;
 
     private final java.util.Map<String, ParentOtpData> parentOtpCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1032,78 +1032,7 @@ public class AuthService {
             throw new MailException("Invalid phone number format. Please provide a valid 10-digit mobile number.");
         }
 
-        if (smsForgotPasswordTemplateId == null || smsForgotPasswordTemplateId.trim().isEmpty()) {
-            log.error("MSG91 Delivery blocked: 'sms.provider.forgotPasswordTemplateId' is not configured.");
-            throw new MailException("SMS service is not configured. Please contact support or use Email recovery.");
-        }
-
-        if (smsAuthKey == null || smsAuthKey.trim().isEmpty()) {
-            log.error("MSG91 Delivery blocked: 'sms.provider.authkey' is not configured.");
-            throw new MailException("SMS service authentication is not configured. Please contact support or use Email recovery.");
-        }
-
-        try {
-            RestTemplate restTemplate = new RestTemplate();
-            String url = "https://control.msg91.com/api/v5/flow";
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("authkey", smsAuthKey.trim());
-            headers.set("Accept", "application/json");
-            headers.set("Content-Type", "application/json");
-
-            String senderField = (smsSenderId != null && !smsSenderId.trim().isEmpty())
-                    ? "  \"sender\": \"" + smsSenderId.trim() + "\",\n"
-                    : "";
-
-            String requestBody = "{\n" +
-                    "  \"template_id\": \"" + smsForgotPasswordTemplateId.trim() + "\",\n" +
-                    "  \"short_url\": \"0\",\n" +
-                    senderField +
-                    "  \"recipients\": [\n" +
-                    "    {\n" +
-                    "      \"mobiles\": \"" + cleanMobile + "\",\n" +
-                    "      \"num\": \"" + otp + "\",\n" +
-                    "      \"NUM\": \"" + otp + "\",\n" +
-                    "      \"VAR1\": \"" + otp + "\",\n" +
-                    "      \"var1\": \"" + otp + "\",\n" +
-                    "      \"OTP\": \"" + otp + "\",\n" +
-                    "      \"otp\": \"" + otp + "\"\n" +
-                    "    }\n" +
-                    "  ]\n" +
-                    "}";
-
-            HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
-            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
-            
-            String responseBody = response.getBody();
-            log.info("MSG91 API response status: {}", response.getStatusCode());
-            
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            if (responseBody != null) {
-                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
-                if (root.has("type") && "error".equalsIgnoreCase(root.get("type").asText())) {
-                    String errorMessage = root.has("message") ? root.get("message").asText() : "Unknown MSG91 Error";
-                    log.error("MSG91 rejected OTP SMS delivery: {}", errorMessage);
-                    throw new MailException("Failed to send OTP SMS: " + errorMessage);
-                }
-            }
-            log.info("✓ OTP SMS successfully dispatched via MSG91 to masked recipient: {}", maskPhone(mobileNumber));
-        } catch (MailException me) {
-            throw me;
-        } catch (org.springframework.web.client.HttpStatusCodeException httpEx) {
-            log.error("MSG91 HTTP error: status {}", httpEx.getStatusCode());
-            String errorMsg = "SMS delivery failed";
-            try {
-                com.fasterxml.jackson.databind.JsonNode root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(httpEx.getResponseBodyAsString());
-                if (root.has("message")) {
-                    errorMsg = root.get("message").asText();
-                }
-            } catch (Exception ignored) {}
-            throw new MailException("Failed to send OTP SMS: " + errorMsg);
-        } catch (Exception e) {
-            log.error("Failed to send OTP SMS: {}", e.getMessage());
-            throw new MailException("Failed to send OTP SMS. Please try again later.");
-        }
+        sendSmsViaMsg91(cleanMobile, otp);
     }
 
     /**
